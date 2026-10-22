@@ -1,0 +1,1 @@
+ALTER TABLE "Rover_ledgers" ALTER COLUMN "UserId" SET DATA TYPE uuid;

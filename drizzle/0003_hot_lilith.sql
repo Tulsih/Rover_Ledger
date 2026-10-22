@@ -1,0 +1,1 @@
+ALTER TABLE "Rover_ledgers" ADD COLUMN "UserId" uuid PRIMARY KEY NOT NULL DEFAULT gen_random_uuid();

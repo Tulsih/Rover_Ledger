@@ -1,0 +1,1 @@
+ALTER TABLE "Rover_ledgers" DROP COLUMN "UserId";
