@@ -87,17 +87,18 @@ class AuthService {
       }
 
       // Existing user found:
-      // When user logs in, if they previously logged out (isActive: false), set isActive back to true
+      // When user logs in, ensure isActive is true (reactivating if previously logged out)
       const updatePayload = {
         isActive: true,
       };
 
-      // Sync latest profile information from Microsoft
-      if (msProfile.firstName && msProfile.firstName !== user.FirstName) updatePayload.FirstName = msProfile.firstName;
-      if (msProfile.lastName && msProfile.lastName !== user.LastName) updatePayload.LastName = msProfile.lastName;
-      if (msProfile.fullName && msProfile.fullName !== user.FullName) updatePayload.FullName = msProfile.fullName;
-      if (msProfile.designation && msProfile.designation !== user.Designation) updatePayload.Designation = msProfile.designation;
-      if (msProfile.gender && msProfile.gender !== user.Gender) updatePayload.Gender = msProfile.gender;
+      // Preserve existing profile details edited by user in Rover Ledger.
+      // Only backfill missing/empty fields from Microsoft if not already set.
+      if ((!user.FirstName || !user.FirstName.trim()) && msProfile.firstName) updatePayload.FirstName = msProfile.firstName;
+      if ((!user.LastName || !user.LastName.trim()) && msProfile.lastName) updatePayload.LastName = msProfile.lastName;
+      if ((!user.FullName || !user.FullName.trim()) && msProfile.fullName) updatePayload.FullName = msProfile.fullName;
+      if ((!user.Designation || !user.Designation.trim()) && msProfile.designation) updatePayload.Designation = msProfile.designation;
+      if ((!user.Gender || !user.Gender.trim()) && msProfile.gender) updatePayload.Gender = msProfile.gender;
 
       user = await userRepository.updateUser(user.UserId, updatePayload);
     } else {

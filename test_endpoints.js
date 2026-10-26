@@ -194,6 +194,70 @@ async function runTests() {
     }
     console.log('   ✅ Profile fetch succeeded after re-login reactivation.\n');
 
+    // 8. Test Profile Persistence Across Logout & Re-login (Prevent Microsoft Overwrite)
+    console.log('8️⃣ Testing Profile Persistence Across Logout & Re-Login (Prevent Overwrite)...');
+    
+    // Update user profile to custom values
+    const customProfilePayload = {
+      FirstName: 'Shraddha-Updated',
+      LastName: 'Chauhan-Updated',
+      Designation: 'Lead Architect',
+      Gender: 'Female',
+    };
+    const customUpdateRes = await makeRequest('/users/profile', 'PUT', customProfilePayload, reloginToken);
+    if (
+      customUpdateRes.status !== 200 ||
+      customUpdateRes.data.data.FirstName !== 'Shraddha-Updated' ||
+      customUpdateRes.data.data.LastName !== 'Chauhan-Updated' ||
+      customUpdateRes.data.data.FullName !== 'Shraddha-Updated Chauhan-Updated' ||
+      customUpdateRes.data.data.Designation !== 'Lead Architect'
+    ) {
+      throw new Error('Failed to set custom profile details before logout test');
+    }
+    console.log('   ✅ Profile successfully updated to custom values in Rover Ledger.');
+
+    // Logout
+    const logoutRes2 = await makeRequest('/auth/logout', 'POST', null, reloginToken);
+    if (logoutRes2.status !== 200 || logoutRes2.data.data.isActive !== false) {
+      throw new Error('Logout failed during profile persistence test');
+    }
+    console.log('   ✅ User successfully logged out (isActive: false).');
+
+    // Re-login with Microsoft (dummy profile has original "Shraddha", "Chauhan", "Software Engineer")
+    const reloginRes2 = await makeRequest('/auth/microsoft', 'POST', { code: 'shraddha' });
+    if (reloginRes2.status !== 200 || !reloginRes2.data.success) {
+      throw new Error('Re-login failed during profile persistence test');
+    }
+
+    const reloadedUser = reloginRes2.data.data.user;
+    console.log('   Re-login returned user profile:', {
+      FirstName: reloadedUser.FirstName,
+      LastName: reloadedUser.LastName,
+      FullName: reloadedUser.FullName,
+      Designation: reloadedUser.Designation,
+    });
+
+    if (
+      reloadedUser.FirstName !== 'Shraddha-Updated' ||
+      reloadedUser.LastName !== 'Chauhan-Updated' ||
+      reloadedUser.FullName !== 'Shraddha-Updated Chauhan-Updated' ||
+      reloadedUser.Designation !== 'Lead Architect'
+    ) {
+      throw new Error('BUG DETECTED: Profile details were overwritten by Microsoft OAuth details on re-login!');
+    }
+    console.log('   ✅ Re-login response strictly preserved custom updated profile details.');
+
+    // Verify GET /users/profile also reflects the preserved details
+    const finalProfileRes = await makeRequest('/users/profile', 'GET', null, reloginRes2.data.data.token);
+    if (
+      finalProfileRes.status !== 200 ||
+      finalProfileRes.data.data.FirstName !== 'Shraddha-Updated' ||
+      finalProfileRes.data.data.LastName !== 'Chauhan-Updated'
+    ) {
+      throw new Error('Profile fetch after re-login did not return preserved custom details');
+    }
+    console.log('   ✅ Profile fetch verified: Database retains updated profile across sessions without being overwritten.\n');
+
     console.log('🎉 ALL TESTS PASSED SUCCESSFULLY! Everything is functioning properly.\n');
   } catch (err) {
     console.error('❌ Test failed:', err);
