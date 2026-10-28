@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
-    "test": "node test_endpoints.js",
+    "test": "node test_endpoints.js && node test_documents.js",
+    "test:auth": "node test_endpoints.js",
+    "test:documents": "node test_documents.js",
     "Db:generate": "drizzle-kit generate",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push --force",
@@ -28,6 +30,7 @@
     "drizzle-orm": "^0.45.4",
     "express": "^5.3.0",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^2.5.0",
     "pg": "^8.23.1",
     "swagger-ui-express": "^5.0.1",
     "yamljs": "^0.3.0"

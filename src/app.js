@@ -104,6 +104,12 @@ const rootHandler = (req, res) => {
       profileFetch: 'GET /users/profile (Headers: Authorization: Bearer <token>)',
       profileUpdate: 'PUT /users/profile (Headers: Authorization: Bearer <token>)',
       logout: 'POST /auth/logout (Headers: Authorization: Bearer <token>)',
+      uploadDocument: 'POST /documents/upload (multipart/form-data: file, documentName, documentType, documentDate, pdfCreated)',
+      fetchAllDocuments: 'GET /documents (Query: page, limit, sortBy, order)',
+      filterDocuments: 'GET /documents/filter (Query: documentType, documentName, startDate, endDate, pdfCreated)',
+      getDocumentById: 'GET /documents/:id',
+      downloadDocument: 'GET /documents/:id/download (Streams file content from OneDrive)',
+      deleteDocument: 'DELETE /documents/:id (Soft delete)',
     },
   });
 };

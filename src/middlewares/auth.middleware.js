@@ -35,6 +35,30 @@ const authenticateToken = (req, res, next) => {
   }
 };
 
+/**
+ * Optional Authentication Middleware
+ * 
+ * Attaches user to req.user if a valid token is present, but does not block requests without token.
+ */
+const optionalAuth = (req, res, next) => {
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+  if (!authHeader) {
+    return next();
+  }
+
+  const parts = authHeader.split(' ');
+  if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
+    try {
+      const decoded = verifyToken(parts[1]);
+      req.user = decoded;
+    } catch (e) {
+      // For optional auth, continue even if token is invalid or expired
+    }
+  }
+  next();
+};
+
 module.exports = {
   authenticateToken,
+  optionalAuth,
 };

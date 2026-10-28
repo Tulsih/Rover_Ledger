@@ -22,6 +22,8 @@ tags:
     description: Microsoft OAuth 2.0 login and token handling
   - name: User Profile
     description: Authenticated user profile retrieval and modification
+  - name: Document Management
+    description: Upload, filter, fetch, download, and soft delete documents synced to Microsoft OneDrive
   - name: System
     description: Health check and root information endpoints
 
@@ -290,6 +292,392 @@ paths:
         '200':
           description: API Information.
 
+  # ==========================================
+  # DOCUMENT MANAGEMENT ENDPOINTS (MICROSOFT ONEDRIVE)
+  # ==========================================
+  /documents/upload:
+    post:
+      tags:
+        - Document Management
+      summary: Upload Image/Document to Microsoft OneDrive & Save to DB
+      description: |
+        Uploads an image (PNG, JPG, JPEG, WEBP, GIF) or any document file (PDF, DOCX, TXT, etc.) directly into the **RoverLedger** Microsoft OneDrive folder.
+        The file metadata is persisted in the PostgreSQL `document_details` table.
+      operationId: uploadDocument
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+                - documentName
+                - documentType
+                - documentDate
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The image or document binary file
+                documentName:
+                  type: string
+                  description: Name of the document entered by user
+                  example: April 2026 Office Rent Invoice
+                documentType:
+                  type: string
+                  enum: [income, expense]
+                  description: Type of document (either 'income' or 'expense')
+                  example: expense
+                documentDate:
+                  type: string
+                  format: date
+                  description: Date of document (YYYY-MM-DD or ISO string)
+                  example: "2026-04-15"
+                pdfCreated:
+                  type: boolean
+                  description: Whether a PDF is created
+                  example: false
+      responses:
+        '201':
+          description: Document uploaded to OneDrive and recorded in DB successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentUploadResponse'
+        '400':
+          description: Validation error or missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /documents:
+    get:
+      tags:
+        - Document Management
+      summary: Fetch All Documents
+      description: |
+        Retrieves all active documents with pagination and sorting.
+        If an **Authorization Bearer token** is provided in the headers (`Authorization: Bearer <token>`), it automatically scopes the returned list to documents uploaded by that authenticated user.
+      operationId: getAllDocuments
+      security:
+        - bearerAuth: []
+        - {}
+      parameters:
+        - name: page
+          in: query
+          description: Page number
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page (max 100)
+          schema:
+            type: integer
+            default: 10
+        - name: sortBy
+          in: query
+          description: Field to sort by
+          schema:
+            type: string
+            enum: [createdAt, updatedAt, documentDate, documentName, fileSize]
+            default: createdAt
+        - name: order
+          in: query
+          description: Sort direction
+          schema:
+            type: string
+            enum: [desc, asc]
+            default: desc
+        - name: documentType
+          in: query
+          description: Optional filter by type (income or expense)
+          schema:
+            type: string
+            enum: [income, expense]
+        - name: documentName
+          in: query
+          description: Optional partial document name search
+          schema:
+            type: string
+        - name: startDate
+          in: query
+          description: Filter documents on or after this date (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          description: Filter documents on or before this date (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+        - name: pdfCreated
+          in: query
+          description: Filter by PDF created flag
+          schema:
+            type: boolean
+        - name: includeDeleted
+          in: query
+          description: Include soft-deleted documents
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Paginated list of documents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentListResponse'
+
+  /documents/filter:
+    post:
+      tags:
+        - Document Management
+      summary: Filter Documents (Request Body Only)
+      description: |
+        Filter documents by criteria passed in the **request body** (JSON).
+        Does NOT rely on query parameters.
+        If an **Authorization Bearer token** is provided in the headers, it automatically scopes the filtered results to documents uploaded by that authenticated user.
+      operationId: filterDocuments
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                documentType:
+                  type: string
+                  enum: [income, expense]
+                  description: Filter by document type ('income' or 'expense')
+                  example: expense
+                documentName:
+                  type: string
+                  description: Partial document name filter
+                  example: Rent
+                startDate:
+                  type: string
+                  format: date
+                  description: Start of documentDate range (YYYY-MM-DD)
+                  example: "2026-01-01"
+                endDate:
+                  type: string
+                  format: date
+                  description: End of documentDate range (YYYY-MM-DD)
+                  example: "2026-12-31"
+                pdfCreated:
+                  type: boolean
+                  description: Filter by whether PDF is created
+                  example: false
+                search:
+                  type: string
+                  description: Global search term matching documentName or originalFileName
+                  example: invoice
+                fileType:
+                  type: string
+                  description: MIME type filter (e.g. image, pdf)
+                  example: image/jpeg
+                page:
+                  type: integer
+                  description: Page number
+                  default: 1
+                  example: 1
+                limit:
+                  type: integer
+                  description: Records per page
+                  default: 10
+                  example: 10
+                sortBy:
+                  type: string
+                  enum: [createdAt, updatedAt, documentDate, documentName, fileSize]
+                  default: createdAt
+                order:
+                  type: string
+                  enum: [desc, asc]
+                  default: desc
+      responses:
+        '200':
+          description: Filtered document list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentListResponse'
+
+  /documents/bulk:
+    delete:
+      tags:
+        - Document Management
+      summary: Bulk Soft Delete Documents
+      description: |
+        Soft deletes multiple documents by passing an array of document IDs.
+        If an ID exists in the database and is not already soft-deleted (`softDelete = false`), it is updated to `softDelete = true`.
+        IDs that are not found or already soft-deleted are safely skipped and reported in `notFoundOrAlreadyDeleted`.
+      operationId: bulkSoftDeleteDocuments
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkDeleteRequest'
+      responses:
+        '200':
+          description: Bulk soft delete completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkDeleteResponse'
+        '400':
+          description: Validation error (e.g. empty or invalid IDs array)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /documents/bulk-delete:
+    post:
+      tags:
+        - Document Management
+      summary: Bulk Soft Delete Documents (POST Alias)
+      description: |
+        POST alias for bulk soft deleting multiple documents. Useful for HTTP clients, libraries, and proxies that restrict or omit request bodies in DELETE calls.
+      operationId: bulkSoftDeleteDocumentsPost
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkDeleteRequest'
+      responses:
+        '200':
+          description: Bulk soft delete completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkDeleteResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /documents/{id}:
+    get:
+      tags:
+        - Document Management
+      summary: Get Document Details by ID
+      description: Returns full metadata for a document including OneDrive item ID, web URL, and download link.
+      operationId: getDocumentById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID of the document
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Document details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentSingleResponse'
+        '404':
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Document Management
+      summary: Soft Delete Document
+      description: Marks the document as soft-deleted in the database (`softDelete = true`).
+      operationId: softDeleteDocument
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID of the document
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Document soft deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentSingleResponse'
+        '404':
+          description: Document not found or already deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /documents/{id}/download:
+    get:
+      tags:
+        - Document Management
+      summary: Download / Stream Document File from OneDrive
+      description: Streams the original binary file directly from Microsoft OneDrive to the client.
+      operationId: downloadDocument
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID of the document
+          schema:
+            type: string
+            format: uuid
+        - name: inline
+          in: query
+          description: View file directly in browser instead of attachment download
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Binary file stream
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Document not found
+        '502':
+          description: Microsoft OneDrive streaming failure
+
 # ==========================================
 # COMPONENTS & SCHEMAS
 # ==========================================
@@ -433,3 +821,183 @@ components:
           type: string
           nullable: true
           description: Optional error detail or stack trace
+
+    # Document Details Model
+    DocumentDetails:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique document identifier
+          example: 8e8c679a-c9ad-4e63-a21c-a99f36fcfb3d
+        documentName:
+          type: string
+          description: Name given to document by user
+          example: April 2026 Office Rent Invoice
+        documentType:
+          type: string
+          enum: [income, expense]
+          description: Document type
+          example: expense
+        fileSize:
+          type: integer
+          description: Size in bytes
+          example: 1048576
+        fileType:
+          type: string
+          description: MIME type of file
+          example: image/jpeg
+        documentDate:
+          type: string
+          format: date-time
+          description: Date of document
+          example: "2026-04-15T00:00:00.000Z"
+        pdfCreated:
+          type: boolean
+          description: Flag indicating whether PDF is created
+          example: false
+        softDelete:
+          type: boolean
+          description: Soft delete status
+          example: false
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-10-27T10:00:00.000Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2026-10-27T10:00:00.000Z"
+        oneDriveItemId:
+          type: string
+          description: Microsoft OneDrive item identifier
+          example: 01TQSGEJX5O4F76N6CDJGI33YMJKODFDH3
+        oneDriveWebUrl:
+          type: string
+          nullable: true
+          description: Direct web link to preview on SharePoint / OneDrive
+          example: https://techroverinc-my.sharepoint.com/...
+        oneDriveDownloadUrl:
+          type: string
+          nullable: true
+          description: Temporary download URL from Microsoft Graph
+        originalFileName:
+          type: string
+          description: Original uploaded filename
+          example: invoice_rent.jpg
+        uploadedBy:
+          type: string
+          format: uuid
+          nullable: true
+          description: User ID who uploaded the file
+
+    # Document Upload Response
+    DocumentUploadResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Document uploaded and synced to Microsoft OneDrive successfully
+        data:
+          $ref: '#/components/schemas/DocumentDetails'
+
+    # Document Single Response
+    DocumentSingleResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Document details fetched successfully
+        data:
+          $ref: '#/components/schemas/DocumentDetails'
+
+    # Document List Response (Paginated)
+    DocumentListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Documents fetched successfully
+        data:
+          type: object
+          properties:
+            rows:
+              type: array
+              items:
+                $ref: '#/components/schemas/DocumentDetails'
+            total:
+              type: integer
+              example: 42
+            page:
+              type: integer
+              example: 1
+            limit:
+              type: integer
+              example: 10
+            totalPages:
+              type: integer
+              example: 5
+
+    # Bulk Delete Request
+    BulkDeleteRequest:
+      type: object
+      required:
+        - ids
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Array of document UUIDs to soft delete
+          example:
+            - "b83a24d5-5ec9-48f8-b3d5-6bca9566236b"
+            - "9f4c3218-1e4a-4933-bf44-7934c568910a"
+
+    # Bulk Delete Response
+    BulkDeleteResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Bulk soft delete completed. Successfully soft deleted 2 document(s).
+        data:
+          type: object
+          properties:
+            totalRequested:
+              type: integer
+              example: 3
+            deletedCount:
+              type: integer
+              example: 2
+            deletedIds:
+              type: array
+              items:
+                type: string
+                format: uuid
+              example:
+                - "b83a24d5-5ec9-48f8-b3d5-6bca9566236b"
+                - "9f4c3218-1e4a-4933-bf44-7934c568910a"
+            notFoundOrAlreadyDeleted:
+              type: array
+              items:
+                type: string
+              example:
+                - "3d7b43a1-77e8-466d-9218-1c4b12345678"
+            documents:
+              type: array
+              items:
+                $ref: '#/components/schemas/DocumentDetails'
