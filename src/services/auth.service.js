@@ -1,6 +1,14 @@
-const { log } = require('node:console');
 const userRepository = require('../repositories/user.repository');
-const { generateToken } = require('../utils/jwt.util');
+const refreshTokenRepository = require('../repositories/refreshToken.repository');
+const {
+  generateAccessToken,
+  generateRefreshToken,
+  verifyRefreshToken,
+  hashToken,
+  parseExpiresInSeconds,
+  JWT_ACCESS_EXPIRES_IN,
+  JWT_REFRESH_EXPIRES_IN,
+} = require('../utils/jwt.util');
 const {
   getMicrosoftAuthUrl,
   exchangeCodeForTokens,
@@ -10,8 +18,8 @@ const {
 /**
  * Authentication Service
  * 
- * Contains business logic for Microsoft OAuth authentication,
- * user registration, and JWT token issuance.
+ * Handles business logic for Microsoft OAuth authentication,
+ * Access & Refresh token issuance, token rotation, and logout.
  */
 class AuthService {
   /**
@@ -25,17 +33,14 @@ class AuthService {
   }
 
   /**
-   * Authenticate user with Microsoft
-   * Supports:
-   * 1. Authorization Code flow: passes { code, redirectUri }
-   * 2. Direct Microsoft Access Token: passes { accessToken }
+   * Authenticate user with Microsoft and issue Access Token + Refresh Token
    * 
-   * @param {object} params - { code, accessToken, redirectUri, codeVerifier }
-   * @returns {Promise<object>} Authenticated user and JWT token
+   * @param {object} params - { code, accessToken, redirectUri, codeVerifier, deviceInfo, ipAddress }
+   * @returns {Promise<object>} Authenticated user and dual JWT tokens
    */
-  async loginWithMicrosoft({ code, accessToken, redirectUri, codeVerifier }) {
+  async loginWithMicrosoft({ code, accessToken, redirectUri, codeVerifier, deviceInfo, ipAddress }) {
     let msProfile;
-    console.log("[Login with Microsoft] Request Body:", { code, accessToken, redirectUri, codeVerifier });
+    console.log('[Login with Microsoft] Request Body:', { code, accessToken, redirectUri, codeVerifier });
 
     // Check if a dummy testing code is provided (e.g. for Swagger UI testing without a live Microsoft account)
     const isDummyCode =
@@ -64,7 +69,9 @@ class AuthService {
       }
 
       if (!token) {
-        throw new Error('Either authorization code or Microsoft access token must be provided');
+        const err = new Error('Either authorization code or Microsoft access token must be provided');
+        err.statusCode = 400;
+        throw err;
       }
 
       // Step 2: Fetch user profile from Microsoft Graph API
@@ -72,7 +79,9 @@ class AuthService {
     }
 
     if (!msProfile.email) {
-      throw new Error('Unable to retrieve email from Microsoft account. Please ensure email permissions are granted.');
+      const err = new Error('Unable to retrieve email from Microsoft account. Please ensure email permissions are granted.');
+      err.statusCode = 400;
+      throw err;
     }
 
     const email = msProfile.email.toLowerCase();
@@ -81,13 +90,14 @@ class AuthService {
     let user = await userRepository.findAnyByEmail(email);
 
     if (user) {
-      // Validate that account has not been deleted
+      // Validate that account has not been soft-deleted
       if (user.SoftDelete) {
-        throw new Error('Account has been deleted. Please contact your system administrator.');
+        const err = new Error('Account has been deleted. Please contact your system administrator.');
+        err.statusCode = 403;
+        throw err;
       }
 
-      // Existing user found:
-      // When user logs in, ensure isActive is true (reactivating if previously logged out)
+      // Existing user found: reactivate if previously logged out
       const updatePayload = {
         isActive: true,
       };
@@ -116,15 +126,34 @@ class AuthService {
       });
     }
 
-    // Step 5: Generate JWT Token for application session
-    const appToken = generateToken({
+    // Step 5: Issue dual tokens: Access Token (15m) + Refresh Token (7d)
+    const tokenPayload = {
       UserId: user.UserId,
       Email: user.Email,
       Role: user.Role,
+    };
+
+    const appAccessToken = generateAccessToken(tokenPayload);
+    const appRefreshToken = generateRefreshToken(tokenPayload);
+
+    // Step 6: Hash and store the refresh token in PostgreSQL
+    const tokenHash = hashToken(appRefreshToken);
+    const refreshDurationSec = parseExpiresInSeconds(JWT_REFRESH_EXPIRES_IN);
+    const refreshExpiresAt = new Date(Date.now() + refreshDurationSec * 1000);
+
+    await refreshTokenRepository.createRefreshToken({
+      userId: user.UserId,
+      tokenHash,
+      deviceInfo,
+      ipAddress,
+      expiresAt: refreshExpiresAt,
     });
 
     return {
-      token: appToken,
+      accessToken: appAccessToken,
+      refreshToken: appRefreshToken,
+      tokenType: 'Bearer',
+      expiresIn: parseExpiresInSeconds(JWT_ACCESS_EXPIRES_IN),
       user: {
         UserId: user.UserId,
         FirstName: user.FirstName,
@@ -142,11 +171,130 @@ class AuthService {
   }
 
   /**
-   * Logout user and mark isActive as false in database
-   * @param {object} params - { userId, email }
+   * Refresh Access Token using Refresh Token with Token Rotation
+   * 
+   * @param {object} params - { refreshToken, deviceInfo, ipAddress }
+   * @returns {Promise<object>} New access and refresh token pair
+   */
+  async refreshToken({ refreshToken, deviceInfo, ipAddress }) {
+    if (!refreshToken || typeof refreshToken !== 'string' || !refreshToken.trim()) {
+      const err = new Error('Validation Error: "refreshToken" is required.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const cleanRefreshToken = refreshToken.trim();
+
+    // 1. Verify token signature and expiration
+    let decoded;
+    try {
+      decoded = verifyRefreshToken(cleanRefreshToken);
+    } catch (err) {
+      const error = new Error(
+        err.name === 'TokenExpiredError'
+          ? 'Refresh token has expired. Please login again.'
+          : 'Invalid refresh token.'
+      );
+      error.statusCode = 401;
+      error.code = 'REFRESH_TOKEN_EXPIRED';
+      throw error;
+    }
+
+    // 2. Query hashed token in database
+    const tokenHash = hashToken(cleanRefreshToken);
+    const tokenRecord = await refreshTokenRepository.findByTokenHash(tokenHash);
+
+    if (!tokenRecord) {
+      const err = new Error('Refresh token not recognized or already revoked. Please login again.');
+      err.statusCode = 401;
+      err.code = 'INVALID_REFRESH_TOKEN';
+      throw err;
+    }
+
+    // 3. Security Replay Detection: If token is already revoked, revoke all tokens for this user
+    if (tokenRecord.isRevoked) {
+      console.warn(`⚠️ [Security Alert] Reused refresh token detected for userId: ${tokenRecord.userId}. Revoking all sessions.`);
+      await refreshTokenRepository.revokeAllUserTokens(tokenRecord.userId);
+      const err = new Error('Security Alert: Refresh token has been reused. All active sessions have been terminated. Please login again.');
+      err.statusCode = 401;
+      err.code = 'TOKEN_REUSE_DETECTED';
+      throw err;
+    }
+
+    // 4. Check if token expired according to database record
+    if (new Date() > new Date(tokenRecord.expiresAt)) {
+      await refreshTokenRepository.revokeToken(tokenHash);
+      const err = new Error('Refresh token has expired. Please login again.');
+      err.statusCode = 401;
+      err.code = 'REFRESH_TOKEN_EXPIRED';
+      throw err;
+    }
+
+    // 5. Ensure the user still exists and is active
+    const user = await userRepository.findById(tokenRecord.userId);
+    if (!user) {
+      const err = new Error('User account not found or has been deleted.');
+      err.statusCode = 401;
+      throw err;
+    }
+
+    if (!user.isActive) {
+      const err = new Error('Account is inactive. Please login again to reactivate your session.');
+      err.statusCode = 401;
+      throw err;
+    }
+
+    // 6. Token Rotation: Invalidate the current refresh token
+    await refreshTokenRepository.revokeToken(tokenHash);
+
+    // 7. Issue new Access Token and rotated Refresh Token
+    const tokenPayload = {
+      UserId: user.UserId,
+      Email: user.Email,
+      Role: user.Role,
+    };
+
+    const newAccessToken = generateAccessToken(tokenPayload);
+    const newRefreshToken = generateRefreshToken(tokenPayload);
+    const newHash = hashToken(newRefreshToken);
+    const refreshDurationSec = parseExpiresInSeconds(JWT_REFRESH_EXPIRES_IN);
+    const newExpiresAt = new Date(Date.now() + refreshDurationSec * 1000);
+
+    await refreshTokenRepository.createRefreshToken({
+      userId: user.UserId,
+      tokenHash: newHash,
+      deviceInfo: deviceInfo || tokenRecord.deviceInfo,
+      ipAddress: ipAddress || tokenRecord.ipAddress,
+      expiresAt: newExpiresAt,
+    });
+
+    return {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      tokenType: 'Bearer',
+      expiresIn: parseExpiresInSeconds(JWT_ACCESS_EXPIRES_IN),
+      user: {
+        UserId: user.UserId,
+        FirstName: user.FirstName,
+        LastName: user.LastName,
+        FullName: user.FullName,
+        Email: user.Email,
+        Gender: user.Gender,
+        Role: user.Role,
+        Designation: user.Designation,
+        isActive: user.isActive,
+        CreatedAt: user.CreatedAt,
+        UpdatedAt: user.UpdatedAt,
+      },
+    };
+  }
+
+  /**
+   * Logout user, revoke refresh token(s), and mark isActive as false in database
+   * @param {object} params - { userId, email, refreshToken }
    * @returns {Promise<object>} Result with updated user status
    */
-  async logout({ userId, email }) {
+  async logout({ userId, email, refreshToken }) {
     let user = null;
 
     if (userId) {
@@ -155,20 +303,33 @@ class AuthService {
       user = await userRepository.findByEmail(email.toLowerCase().trim());
     }
 
-    if (!user) {
-      throw new Error('User not found or account has been deleted.');
+    // If a specific refreshToken was provided, revoke it
+    if (refreshToken && typeof refreshToken === 'string') {
+      const tokenHash = hashToken(refreshToken.trim());
+      await refreshTokenRepository.revokeToken(tokenHash);
     }
 
-    // Set user's isActive status to false in database
-    const updatedUser = await userRepository.updateUser(user.UserId, {
-      isActive: false,
-    });
+    if (user) {
+      // Invalidate all active sessions in refresh_tokens table
+      await refreshTokenRepository.revokeAllUserTokens(user.UserId);
+
+      // Set user's isActive status to false in database
+      const updatedUser = await userRepository.updateUser(user.UserId, {
+        isActive: false,
+      });
+
+      return {
+        UserId: updatedUser.UserId,
+        Email: updatedUser.Email,
+        FullName: updatedUser.FullName,
+        isActive: updatedUser.isActive,
+        sessionsTerminated: true,
+      };
+    }
 
     return {
-      UserId: updatedUser.UserId,
-      Email: updatedUser.Email,
-      FullName: updatedUser.FullName,
-      isActive: updatedUser.isActive,
+      success: true,
+      sessionsTerminated: true,
     };
   }
 }

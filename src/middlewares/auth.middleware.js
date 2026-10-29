@@ -1,37 +1,52 @@
-const { verifyToken } = require('../utils/jwt.util');
-const { sendError } = require('../utils/response.util');
+const { verifyAccessToken } = require('../utils/jwt.util');
 
 /**
  * Authentication Middleware
  * 
- * Verifies the JWT Bearer token from the incoming request Authorization header.
+ * Verifies the JWT Bearer Access Token from incoming Authorization header.
  * Attaches the authenticated user payload to `req.user`.
  */
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
 
   if (!authHeader) {
-    return sendError(res, 401, 'Access denied. No authorization token provided.');
+    return res.status(401).json({
+      success: false,
+      code: 'NO_TOKEN_PROVIDED',
+      message: 'Access denied. No authorization token provided.',
+    });
   }
 
   // Expecting format: "Bearer <token>"
   const parts = authHeader.split(' ');
   if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') {
-    return sendError(res, 401, 'Invalid authorization format. Format must be: Bearer <token>');
+    return res.status(401).json({
+      success: false,
+      code: 'INVALID_TOKEN_FORMAT',
+      message: 'Invalid authorization format. Format must be: Bearer <token>',
+    });
   }
 
   const token = parts[1];
 
   try {
-    const decoded = verifyToken(token);
+    const decoded = verifyAccessToken(token);
     // Attach decoded user info ({ UserId, Email, Role, iat, exp }) to request object
     req.user = decoded;
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
-      return sendError(res, 401, 'Authentication token has expired. Please login again.');
+      return res.status(401).json({
+        success: false,
+        code: 'TOKEN_EXPIRED',
+        message: 'Authentication token has expired. Please refresh your token.',
+      });
     }
-    return sendError(res, 401, 'Invalid authentication token.');
+    return res.status(401).json({
+      success: false,
+      code: 'INVALID_TOKEN',
+      message: 'Invalid authentication token.',
+    });
   }
 };
 
@@ -49,7 +64,7 @@ const optionalAuth = (req, res, next) => {
   const parts = authHeader.split(' ');
   if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
     try {
-      const decoded = verifyToken(parts[1]);
+      const decoded = verifyAccessToken(parts[1]);
       req.user = decoded;
     } catch (e) {
       // For optional auth, continue even if token is invalid or expired

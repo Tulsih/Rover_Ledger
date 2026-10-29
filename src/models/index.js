@@ -4,8 +4,10 @@
  */
 const { RoverLedgers } = require('./user.model');
 const { DocumentDetails } = require('./document.model');
+const { RefreshTokens } = require('./refreshToken.model');
 
 module.exports = {
   RoverLedgers,
   DocumentDetails,
+  RefreshTokens,
 };

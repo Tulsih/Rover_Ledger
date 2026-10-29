@@ -113,12 +113,13 @@ class DocumentService {
   }
 
   /**
-   * Fetch all documents with pagination, sorting, and soft-delete filtering
-   * @param {object} query - Query parameters
-   * @returns {Promise<object>} Paginated documents
+   * Fetch all active documents across all users (softDelete = false)
+   * with counts of income and expense invoices
+   * @param {object} options - Options { page, limit, sortBy, order }
+   * @returns {Promise<object>} Paginated documents and counts
    */
-  async getAllDocuments(query = {}) {
-    return documentRepository.findWithFilters(query);
+  async getAllDocuments(options = {}) {
+    return documentRepository.getAllActiveDocuments(options);
   }
 
   /**

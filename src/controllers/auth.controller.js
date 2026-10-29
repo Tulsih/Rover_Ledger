@@ -4,7 +4,7 @@ const { sendSuccess, sendError } = require('../utils/response.util');
 /**
  * Authentication Controller
  * 
- * Handles HTTP requests for Microsoft OAuth login and token callbacks.
+ * Handles HTTP requests for Microsoft OAuth login, token refresh, and logout.
  */
 class AuthController {
   /**
@@ -15,11 +15,15 @@ class AuthController {
    * Accepts either:
    * 1. { "code": "..." } -> Authorization code from OAuth redirect flow
    * 2. { "accessToken": "..." } -> Access token from frontend MSAL library
+   * 
+   * Returns: { accessToken, refreshToken, expiresIn, user }
    */
   async loginWithMicrosoft(req, res, next) {
     try {
-      const { code, accessToken, redirectUri, codeVerifier, code_verifier } = req.body;
-      const verifier = (codeVerifier || code_verifier || req.query.code_verifier || req.query.codeVerifier)?.trim();
+      const { code, accessToken, redirectUri, codeVerifier, code_verifier } = req.body || {};
+      const verifier = (codeVerifier || code_verifier || req.query?.code_verifier || req.query?.codeVerifier)?.trim();
+      const deviceInfo = req.headers['user-agent'] || null;
+      const ipAddress = req.ip || req.connection?.remoteAddress || null;
 
       console.log('📥 [Auth Request Received]:', {
         bodyKeys: Object.keys(req.body || {}),
@@ -45,12 +49,50 @@ class AuthController {
         accessToken: accessToken?.trim(),
         redirectUri: redirectUri ? redirectUri.trim() : null,
         codeVerifier: verifier,
+        deviceInfo,
+        ipAddress,
       });
 
       return sendSuccess(res, 200, 'Login with Microsoft successful', result);
     } catch (error) {
       console.error('❌ [AuthController.loginWithMicrosoft Error]:', error.message);
-      return sendError(res, 400, error.message);
+      const statusCode = error.statusCode || 400;
+      return sendError(res, statusCode, error.message);
+    }
+  }
+
+  /**
+   * API: Refresh Access Token
+   * 
+   * Endpoint: POST /auth/refresh
+   * 
+   * Validates refresh token, rotates token, and returns a new Access Token + Refresh Token pair.
+   */
+  async refreshToken(req, res, next) {
+    try {
+      const refreshToken = req.body?.refreshToken || req.headers['x-refresh-token'];
+      const deviceInfo = req.headers['user-agent'] || null;
+      const ipAddress = req.ip || req.connection?.remoteAddress || null;
+
+      if (!refreshToken) {
+        return sendError(
+          res,
+          400,
+          'Validation Error: Please provide "refreshToken" in request body.'
+        );
+      }
+
+      const result = await authService.refreshToken({
+        refreshToken,
+        deviceInfo,
+        ipAddress,
+      });
+
+      return sendSuccess(res, 200, 'Token refreshed successfully', result);
+    } catch (error) {
+      console.error('❌ [AuthController.refreshToken Error]:', error.message);
+      const statusCode = error.statusCode || 401;
+      return sendError(res, statusCode, error.message);
     }
   }
 
@@ -58,10 +100,6 @@ class AuthController {
    * Helper Endpoint: Get Microsoft OAuth Login URL
    * 
    * Endpoint: GET /auth/microsoft
-   * 
-   * Usage:
-   * - Browser navigation: Redirects user straight to Microsoft sign-in page
-   * - API client / Frontend: Pass `?redirect=false` to get JSON with the authorization URL
    */
   async getMicrosoftLoginUrl(req, res, next) {
     try {
@@ -84,8 +122,6 @@ class AuthController {
    * OAuth Redirect Callback Handler
    * 
    * Endpoint: GET /auth/microsoft/callback
-   * 
-   * Microsoft redirects the browser here with `?code=...` after user approves permissions.
    */
   async handleMicrosoftCallback(req, res, next) {
     try {
@@ -99,12 +135,15 @@ class AuthController {
         return sendError(res, 400, 'Missing authorization code from Microsoft callback');
       }
 
-      // Complete login flow with the received code
-      const result = await authService.loginWithMicrosoft({ code });
+      const deviceInfo = req.headers['user-agent'] || null;
+      const ipAddress = req.ip || req.connection?.remoteAddress || null;
+
+      const result = await authService.loginWithMicrosoft({ code, deviceInfo, ipAddress });
 
       return sendSuccess(res, 200, 'Microsoft authentication successful via callback', result);
     } catch (error) {
-      return sendError(res, 400, error.message);
+      const statusCode = error.statusCode || 400;
+      return sendError(res, statusCode, error.message);
     }
   }
 
@@ -113,25 +152,23 @@ class AuthController {
    * 
    * Endpoint: POST /auth/logout
    * 
-   * Marks the user's isActive status as false in the database.
-   * Can identify user via:
-   * 1. Authorization Bearer JWT token (req.user.UserId)
-   * 2. Request body { UserId } or { email }
+   * Revokes refresh tokens and marks user's isActive status as false in the database.
    */
   async logout(req, res, next) {
     try {
       const userId = req.user?.UserId || req.body?.UserId || req.body?.userId;
       const email = req.user?.Email || req.body?.Email || req.body?.email;
+      const refreshToken = req.body?.refreshToken || req.headers['x-refresh-token'];
 
-      if (!userId && !email) {
+      if (!userId && !email && !refreshToken) {
         return sendError(
           res,
           400,
-          'Validation Error: Please provide an Authorization Bearer token or "UserId" / "email" in request body.'
+          'Validation Error: Please provide an Authorization Bearer token, "refreshToken", or "UserId" / "email" in request body.'
         );
       }
 
-      const result = await authService.logout({ userId, email });
+      const result = await authService.logout({ userId, email, refreshToken });
 
       return sendSuccess(res, 200, 'User logged out successfully', result);
     } catch (error) {

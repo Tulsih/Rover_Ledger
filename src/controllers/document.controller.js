@@ -13,7 +13,7 @@ class DocumentController {
   async uploadDocument(req, res, next) {
     try {
       const file = req.file;
-      const { documentName, documentType, documentDate, pdfCreated } = req.body;
+      const { documentName, documentType, documentDate, pdfCreated } = req.body || {};
       const user = req.user || null;
 
       const createdDocument = await documentService.uploadDocument({
@@ -39,18 +39,25 @@ class DocumentController {
   }
 
   /**
-   * Fetch All Documents with Pagination and Sorting
+   * Fetch All Active Documents for the Authenticated User
    * GET /documents
-   * Can fetch documents based on authtoken (scopes to authenticated user if token is provided)
+   * Scopes documents, total count, incomeInvoiceCount, and expenseInvoiceCount
+   * strictly to the user identified by the access token.
    */
   async getAllDocuments(req, res, next) {
     try {
-      const options = { ...(req.query || {}) };
-
-      // If authtoken is present, fetch documents uploaded by this authenticated user
-      if (req.user?.UserId) {
-        options.uploadedBy = req.user.UserId;
+      const userId = req.user?.UserId;
+      if (!userId) {
+        return sendError(res, 401, 'Access denied. Please provide a valid Authorization Bearer token.');
       }
+
+      const options = {
+        uploadedBy: userId,
+        page: req.query?.page,
+        limit: req.query?.limit,
+        sortBy: req.query?.sortBy,
+        order: req.query?.order,
+      };
 
       const result = await documentService.getAllDocuments(options);
       return sendSuccess(res, 200, 'Documents fetched successfully', result);

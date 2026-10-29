@@ -106,6 +106,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: 2] Refresh Access Token
+      description: |
+        Exchanges a valid **Refresh Token** for a new **Access Token** and a rotated **Refresh Token**.
+        Implements automatic Refresh Token Rotation for security.
+        If a previously rotated or revoked refresh token is presented, all active sessions for that user are terminated (replay attack prevention).
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+                  description: The long-lived Refresh Token received during login or previous refresh
+                  example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+      responses:
+        '200':
+          description: Token refreshed successfully. Returns new Access and Refresh tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSuccessResponse'
+        '400':
+          description: Validation error (missing refreshToken).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Refresh token expired, invalid, or reused.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /auth/logout:
     post:
       tags:
@@ -359,78 +402,17 @@ paths:
     get:
       tags:
         - Document Management
-      summary: Fetch All Documents
+      summary: Fetch Active Documents for Authenticated User
       description: |
-        Retrieves all active documents with pagination and sorting.
-        If an **Authorization Bearer token** is provided in the headers (`Authorization: Bearer <token>`), it automatically scopes the returned list to documents uploaded by that authenticated user.
+        Retrieves active documents (`softDelete = false`) uploaded by the currently authenticated user based on the Bearer Access Token.
+        No filter parameters are required—simply click "Execute" to fetch this user's active documents.
+        Also calculates and returns `incomeInvoiceCount` and `expenseInvoiceCount` scoped strictly to this user.
       operationId: getAllDocuments
       security:
         - bearerAuth: []
-        - {}
-      parameters:
-        - name: page
-          in: query
-          description: Page number
-          schema:
-            type: integer
-            default: 1
-        - name: limit
-          in: query
-          description: Items per page (max 100)
-          schema:
-            type: integer
-            default: 10
-        - name: sortBy
-          in: query
-          description: Field to sort by
-          schema:
-            type: string
-            enum: [createdAt, updatedAt, documentDate, documentName, fileSize]
-            default: createdAt
-        - name: order
-          in: query
-          description: Sort direction
-          schema:
-            type: string
-            enum: [desc, asc]
-            default: desc
-        - name: documentType
-          in: query
-          description: Optional filter by type (income or expense)
-          schema:
-            type: string
-            enum: [income, expense]
-        - name: documentName
-          in: query
-          description: Optional partial document name search
-          schema:
-            type: string
-        - name: startDate
-          in: query
-          description: Filter documents on or after this date (YYYY-MM-DD)
-          schema:
-            type: string
-            format: date
-        - name: endDate
-          in: query
-          description: Filter documents on or before this date (YYYY-MM-DD)
-          schema:
-            type: string
-            format: date
-        - name: pdfCreated
-          in: query
-          description: Filter by PDF created flag
-          schema:
-            type: boolean
-        - name: includeDeleted
-          in: query
-          description: Include soft-deleted documents
-          schema:
-            type: boolean
-            default: false
       responses:
         '200':
-          description: Paginated list of documents
+          description: Paginated list of all active documents with invoice counts
           content:
             application/json:
               schema:
@@ -787,10 +769,21 @@ components:
         data:
           type: object
           properties:
-            token:
+            accessToken:
               type: string
-              description: Signed JWT Token for authorization headers
+              description: Short-lived JWT Access Token for authorization headers
               example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            refreshToken:
+              type: string
+              description: Long-lived JWT Refresh Token for session refresh
+              example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+            tokenType:
+              type: string
+              example: Bearer
+            expiresIn:
+              type: integer
+              description: Lifespan in seconds
+              example: 900
             user:
               $ref: '#/components/schemas/User'
 
@@ -943,10 +936,16 @@ components:
               example: 1
             limit:
               type: integer
-              example: 10
+              example: 42
             totalPages:
               type: integer
-              example: 5
+              example: 1
+            incomeInvoiceCount:
+              type: integer
+              example: 24
+            expenseInvoiceCount:
+              type: integer
+              example: 18
 
     # Bulk Delete Request
     BulkDeleteRequest:

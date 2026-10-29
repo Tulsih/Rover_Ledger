@@ -121,9 +121,80 @@ class DocumentRepository {
   }
 
   /**
+   * Fetch all active documents for a specific authenticated user (or general),
+   * along with total count, incomeInvoiceCount, and expenseInvoiceCount scoped to that user.
+   * 
+   * @param {object} options - Optional { uploadedBy, page, limit, sortBy, order }
+   * @returns {Promise<{ rows: Array, total: number, page: number, limit: number, totalPages: number, incomeInvoiceCount: number, expenseInvoiceCount: number }>}
+   */
+  async getAllActiveDocuments(options = {}) {
+    const sortColumnMap = {
+      createdAt: DocumentDetails.createdAt,
+      updatedAt: DocumentDetails.updatedAt,
+      documentDate: DocumentDetails.documentDate,
+      documentName: DocumentDetails.documentName,
+      documentType: DocumentDetails.documentType,
+      fileSize: DocumentDetails.fileSize,
+    };
+
+    const sortColumn = sortColumnMap[options.sortBy] || DocumentDetails.createdAt;
+    const sortDirection = String(options.order || 'desc').toLowerCase() === 'asc' ? asc : desc;
+
+    // Filter by softDelete = false and scope to authenticated user if uploadedBy is provided
+    const conditions = [eq(DocumentDetails.softDelete, false)];
+    if (options.uploadedBy) {
+      conditions.push(eq(DocumentDetails.uploadedBy, options.uploadedBy));
+    }
+
+    const whereClause = and(...conditions);
+
+    // Fetch aggregate statistics: total, incomeInvoiceCount, expenseInvoiceCount strictly for this user
+    const statsResult = await db
+      .select({
+        total: sql`count(*)::int`,
+        incomeInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = 'income')::int`,
+        expenseInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = 'expense')::int`,
+      })
+      .from(DocumentDetails)
+      .where(whereClause);
+
+    const total = parseInt(statsResult[0]?.total || '0', 10);
+    const incomeInvoiceCount = parseInt(statsResult[0]?.incomeInvoiceCount || '0', 10);
+    const expenseInvoiceCount = parseInt(statsResult[0]?.expenseInvoiceCount || '0', 10);
+
+    const hasLimit = options.limit !== undefined && options.limit !== null && options.limit !== '';
+    const limit = hasLimit ? Math.max(1, parseInt(options.limit, 10)) : (total > 0 ? total : 10);
+    const page = Math.max(1, parseInt(options.page || '1', 10));
+    const offset = (page - 1) * limit;
+
+    let query = db
+      .select()
+      .from(DocumentDetails)
+      .where(whereClause)
+      .orderBy(sortDirection(sortColumn));
+
+    if (hasLimit || total > 0) {
+      query = query.limit(limit).offset(offset);
+    }
+
+    const rows = await query;
+    const totalPages = limit > 0 ? Math.ceil(total / limit) : 1;
+
+    return {
+      rows,
+      total,
+      page,
+      limit,
+      totalPages: totalPages || 1,
+      incomeInvoiceCount,
+      expenseInvoiceCount,
+    };
+  }
+
+  /**
    * Find documents with filters, pagination, and sorting
    * @param {object} options
-   * @returns {Promise<{ rows: Array, total: number }>}
+   * @returns {Promise<{ rows: Array, total: number, page: number, limit: number, totalPages: number, incomeInvoiceCount: number, expenseInvoiceCount: number }>}
    */
   async findWithFilters(options = {}) {
     const page = Math.max(1, parseInt(options.page || '1', 10));
@@ -146,7 +217,7 @@ class DocumentRepository {
     const sortColumn = sortColumnMap[options.sortBy] || DocumentDetails.createdAt;
     const sortDirection = String(options.order || 'desc').toLowerCase() === 'asc' ? asc : desc;
 
-    // Execute queries for rows and total count
+    // Execute queries for rows and total counts
     const [rows, countResult] = await Promise.all([
       db
         .select()
@@ -156,19 +227,27 @@ class DocumentRepository {
         .limit(limit)
         .offset(offset),
       db
-        .select({ count: sql`count(*)` })
+        .select({
+          total: sql`count(*)::int`,
+          incomeInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = 'income')::int`,
+          expenseInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = 'expense')::int`,
+        })
         .from(DocumentDetails)
         .where(whereClause),
     ]);
 
-    const total = parseInt(countResult[0]?.count || '0', 10);
+    const total = parseInt(countResult[0]?.total || '0', 10);
+    const incomeInvoiceCount = parseInt(countResult[0]?.incomeInvoiceCount || '0', 10);
+    const expenseInvoiceCount = parseInt(countResult[0]?.expenseInvoiceCount || '0', 10);
 
     return {
       rows,
       total,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.ceil(total / limit) || 1,
+      incomeInvoiceCount,
+      expenseInvoiceCount,
     };
   }
 
@@ -220,6 +299,13 @@ class DocumentRepository {
 
     return result[0] || null;
   }
+
+  /**
+   * Bulk soft delete documents
+   * @param {string[]} ids
+   * @param {string|null} userId
+   * @returns {Promise<Array>}
+   */
   async bulkSoftDelete(ids, userId = null) {
     if (!ids || ids.length === 0) {
       return [];

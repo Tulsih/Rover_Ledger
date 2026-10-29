@@ -1,6 +1,10 @@
-# Rover Ledger - Microsoft Login & User Module
+# Rover Ledger - Backend & Cloud Services
 
-A modular, clean, and developer-friendly Node.js backend built with **Express** and **Drizzle ORM** (PostgreSQL) featuring **Microsoft OAuth 2.0 / Entra ID login**, **Profile Fetch**, and **Profile Update** APIs.
+A modular, clean, and developer-friendly Node.js backend built with **Express** and **Drizzle ORM** (PostgreSQL) featuring **Microsoft OAuth 2.0 / Entra ID login**, **Profile Management**, and **Document Management with Microsoft OneDrive / SharePoint Sync**.
+
+> 📖 **Frontend Team Integration Guide**:
+> For a step-by-step walkthrough of the backend flow, sequence diagrams, request envelopes, and FE code examples, see:
+> 👉 **[ROVER_LEDGER_BE_FLOW_GUIDE.md](./ROVER_LEDGER_BE_FLOW_GUIDE.md)**
 
 ---
 
@@ -131,7 +135,10 @@ Interactive Swagger documentation is available out of the box:
     "success": true,
     "message": "Login with Microsoft successful",
     "data": {
-      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "tokenType": "Bearer",
+      "expiresIn": 900,
       "user": {
         "UserId": 1,
         "FirstName": "Shraddha",
@@ -234,32 +241,42 @@ Rover_Ledger/
 ├── drizzle.config.js          # Drizzle Kit configuration for migrations and db push
 ├── package.json               # Dependencies and scripts (Db:generate, db:push, etc.)
 ├── README.md                  # Complete documentation and setup guide
-├── test_endpoints.js          # Automated end-to-end test script
+├── ROVER_LEDGER_BE_FLOW_GUIDE.md # Frontend Integration & BE Architecture Guide
+├── swagger.yaml               # OpenAPI 3.0 specification
+├── test_endpoints.js          # Automated end-to-end test script for auth & user
+├── test_documents.js          # Automated end-to-end test script for documents & OneDrive
 ├── drizzle/                   # Drizzle migration files
 │   └── 0000_young_mojo.sql    # Migration SQL for Rover_ledgers table
 └── src/
-    ├── app.js                 # Express server initialization and middleware
+    ├── app.js                 # Express server initialization, Swagger UI, and middleware
     ├── db.js                  # PostgreSQL pool and Drizzle ORM client setup
     ├── controllers/
-    │   ├── auth.controller.js # Controller for Microsoft login and OAuth callbacks
-    │   └── user.controller.js # Controller for profile fetch and profile update
+    │   ├── auth.controller.js     # Microsoft login and OAuth callbacks
+    │   ├── user.controller.js     # Profile fetch and profile update
+    │   └── document.controller.js # Document upload, filter, download, delete
     ├── middlewares/
-    │   ├── auth.middleware.js # JWT Bearer token authentication middleware
-    │   └── error.middleware.js# Global error and 404 handler middleware
+    │   ├── auth.middleware.js     # JWT Bearer token authentication middleware
+    │   ├── upload.middleware.js   # Multer file upload handling (50MB memory buffer)
+    │   └── error.middleware.js    # Global error and 404 handler middleware
     ├── models/
-    │   ├── index.js           # Models aggregator
-    │   └── user.model.js      # Rover_ledgers Drizzle ORM schema
+    │   ├── index.js               # Models aggregator
+    │   ├── user.model.js          # Rover_ledgers Drizzle ORM schema
+    │   └── document.model.js      # document_details Drizzle ORM schema
     ├── repositories/
-    │   └── user.repository.js # Database CRUD layer using Drizzle ORM
+    │   ├── user.repository.js     # Database CRUD layer for users
+    │   └── document.repository.js # Database CRUD layer for documents
     ├── routes/
-    │   ├── auth.routes.js     # /auth routes
-    │   ├── index.js           # Main routes mounting
-    │   └── user.routes.js     # /users routes
+    │   ├── auth.routes.js         # /auth routes
+    │   ├── user.routes.js         # /users routes
+    │   ├── document.routes.js     # /documents routes
+    │   └── index.js               # Main routes mounting
     ├── services/
-    │   ├── auth.service.js    # Microsoft OAuth, Graph API sync, JWT creation
-    │   └── user.service.js    # Profile retrieval and validation service
+    │   ├── auth.service.js        # Microsoft OAuth, Graph API sync, JWT creation
+    │   ├── user.service.js        # Profile retrieval and validation service
+    │   ├── document.service.js    # Document orchestration and validations
+    │   └── onedrive.service.js    # Microsoft Graph API & OneDrive file streaming
     └── utils/
-        ├── jwt.util.js        # JWT sign & verify utility
-        ├── microsoft.util.js  # Microsoft OAuth URL, token exchange & Graph API
-        └── response.util.js   # Standard success and error response formatting
+        ├── jwt.util.js            # JWT sign & verify utility
+        ├── microsoft.util.js      # Microsoft OAuth URL, token exchange & Graph API
+        └── response.util.js       # Standard success and error response formatting
 ```

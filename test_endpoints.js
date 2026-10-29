@@ -151,7 +151,7 @@ async function runTests() {
       throw new Error('Initial login failed');
     }
     const initialUserId = initialLoginRes.data.data.user.UserId;
-    const initialToken = initialLoginRes.data.data.token;
+    const initialToken = initialLoginRes.data.data.accessToken;
     console.log(`   Initial login succeeded for Shraddha (UserId: ${initialUserId}, isActive: ${initialLoginRes.data.data.user.isActive})`);
 
     // Perform Logout via POST /auth/logout
@@ -176,7 +176,7 @@ async function runTests() {
     }
     const reloginUserId = reloginRes.data.data.user.UserId;
     const reloginIsActive = reloginRes.data.data.user.isActive;
-    const reloginToken = reloginRes.data.data.token;
+    const reloginToken = reloginRes.data.data.accessToken;
     console.log(`   Re-login succeeded (UserId: ${reloginUserId}, isActive: ${reloginIsActive})`);
 
     if (reloginUserId !== initialUserId) {
@@ -248,7 +248,7 @@ async function runTests() {
     console.log('   ✅ Re-login response strictly preserved custom updated profile details.');
 
     // Verify GET /users/profile also reflects the preserved details
-    const finalProfileRes = await makeRequest('/users/profile', 'GET', null, reloginRes2.data.data.token);
+    const finalProfileRes = await makeRequest('/users/profile', 'GET', null, reloginRes2.data.data.accessToken);
     if (
       finalProfileRes.status !== 200 ||
       finalProfileRes.data.data.FirstName !== 'Shraddha-Updated' ||

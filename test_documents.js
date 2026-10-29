@@ -252,41 +252,45 @@ async function runDocumentTests() {
     }
     console.log('   ✅ Document 3 saved with uploadedBy linked to authtoken UserId!\n');
 
-    // 6. Fetch All Documents API (without authtoken)
-    console.log('6️⃣ Testing Fetch All Documents (GET /documents without authtoken)...');
-    const listRes = await makeJsonRequest('/documents');
-    console.log('   Fetch All Documents summary:', {
-      total: listRes.data.data.total,
-      rowsCount: listRes.data.data.rows.length,
-      page: listRes.data.data.page,
+    // 6. Fetch Documents without authtoken (must be rejected 401)
+    console.log('6️⃣ Testing Fetch Documents (GET /documents without authtoken requires auth)...');
+    const unauthListRes = await makeJsonRequest('/documents');
+    console.log('   Unauthenticated response status:', unauthListRes.status);
+    if (unauthListRes.status !== 401) {
+      throw new Error(`Expected 401 Unauthorized when calling GET /documents without token, got ${unauthListRes.status}`);
+    }
+    console.log('   ✅ Correctly rejected unauthenticated request with 401 Unauthorized.\n');
+
+    // 7. Verify GET /documents returns ONLY the authenticated user's active documents with invoice counts
+    console.log('7️⃣ Testing GET /documents returns active documents and invoice counts for the authenticated user only...');
+    const userDocsRes = await makeJsonRequest('/documents', 'GET', null, testUserToken);
+    console.log('   User Docs summary:', {
+      total: userDocsRes.data.data.total,
+      rowsCount: userDocsRes.data.data.rows.length,
+      incomeInvoiceCount: userDocsRes.data.data.incomeInvoiceCount,
+      expenseInvoiceCount: userDocsRes.data.data.expenseInvoiceCount,
     });
 
-    if (listRes.status !== 200 || !listRes.data.success || listRes.data.data.rows.length < 3) {
-      throw new Error('Failed to fetch all documents');
+    if (userDocsRes.status !== 200 || !userDocsRes.data.success) {
+      throw new Error('Failed to fetch documents for authenticated user');
     }
-    console.log('   ✅ GET /documents returned all documents.\n');
 
-    // 7. Fetch Documents based on authtoken (GET /documents with authtoken)
-    console.log('7️⃣ Testing Fetch Documents based on authtoken (GET /documents with Bearer token)...');
-    const userDocListRes = await makeJsonRequest('/documents', 'GET', null, testUserToken);
-    console.log('   User Doc List summary:', {
-      total: userDocListRes.data.data.total,
-      rowsCount: userDocListRes.data.data.rows.length,
-    });
-
-    if (userDocListRes.status !== 200 || !userDocListRes.data.success) {
-      throw new Error('Failed to fetch documents based on authtoken');
-    }
-    // All returned rows MUST belong to the authenticated user
-    for (const row of userDocListRes.data.data.rows) {
+    // Verify all returned rows belong to testUserId
+    for (const row of userDocsRes.data.data.rows) {
       if (row.uploadedBy !== testUserId) {
-        throw new Error(`Authtoken fetch leaked document belonging to another user: uploadedBy=${row.uploadedBy}`);
+        throw new Error(`Document row leaked belonging to another user: uploadedBy=${row.uploadedBy}`);
       }
     }
-    if (!userDocListRes.data.data.rows.some(r => r.id === doc3.id)) {
-      throw new Error('Expected to find Document 3 uploaded by this authenticated user');
+
+    if (userDocsRes.data.data.incomeInvoiceCount === undefined || userDocsRes.data.data.expenseInvoiceCount === undefined) {
+      throw new Error('incomeInvoiceCount or expenseInvoiceCount missing in GET /documents response');
     }
-    console.log('   ✅ GET /documents correctly fetched ONLY documents for the authenticated user based on authtoken!\n');
+
+    // Document 3 was uploaded with testUserToken as 'expense'
+    if (userDocsRes.data.data.expenseInvoiceCount < 1) {
+      throw new Error('Expected at least 1 expense invoice for this user');
+    }
+    console.log('   ✅ GET /documents correctly fetched ONLY documents and counts for the authenticated user!\n');
 
     // 8. Filter Documents: Must contain only req body not query
     console.log('8️⃣ Testing Filter Documents using ONLY req.body (POST /documents/filter)...');
@@ -374,7 +378,7 @@ async function runDocumentTests() {
     }
 
     // Verify GET /documents list excludes soft-deleted document
-    const listAfterDelete = await makeJsonRequest('/documents');
+    const listAfterDelete = await makeJsonRequest('/documents', 'GET', null, testUserToken);
     if (listAfterDelete.data.data.rows.some(r => r.id === doc1.id)) {
       throw new Error('Soft-deleted document still appeared in default /documents list');
     }

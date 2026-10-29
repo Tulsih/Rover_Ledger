@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const documentController = require('../controllers/document.controller');
 const { uploadDocumentFile } = require('../middlewares/upload.middleware');
-const { optionalAuth } = require('../middlewares/auth.middleware');
+const { authenticateToken, optionalAuth } = require('../middlewares/auth.middleware');
 
 /**
  * Document Management Routes
@@ -39,10 +39,10 @@ router.get(
   documentController.filterDocuments.bind(documentController)
 );
 
-// 3. Fetch all documents (supports query filters, pagination, and authtoken scoping)
+// 3. Fetch all active documents for authenticated user based on access token
 router.get(
   '/',
-  optionalAuth,
+  authenticateToken,
   documentController.getAllDocuments.bind(documentController)
 );
 
