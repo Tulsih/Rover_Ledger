@@ -9,10 +9,10 @@
     "test": "node test_endpoints.js && node test_documents.js",
     "test:auth": "node test_endpoints.js",
     "test:documents": "node test_documents.js",
-    "Db:generate": "drizzle-kit generate",
+    "test:google": "node test_google_drive.js",
+    "test:all": "node test_endpoints.js && node test_documents.js && node test_google_drive.js",
     "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push --force",
-    "Db:push": "drizzle-kit push --force"
+    "db:push": "drizzle-kit push --force"
   },
   "keywords": [
     "nodejs",

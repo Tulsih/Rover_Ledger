@@ -336,7 +336,38 @@ api.interceptors.response.use(
 | :--- | :---: | :---: | :--- |
 | `/users/profile` (or `/profile`) | `GET` | ✅ Yes | Fetch current user's profile |
 | `/users/profile` (or `/profile`) | `PUT` / `PATCH` | ✅ Yes | Update profile fields |
+| `/users/profile` (or `/profile`) | `DELETE` | ✅ Yes | Permanent account deletion (Cascading cleanup of user, OneDrive files, and all DB data) |
 | `/auth/logout` | `POST` | Optional / Bearer | Log out (marks `isActive: false` in DB) |
+
+### Permanent Cascading Account Deletion (Option A)
+When an account is deleted via `DELETE /users/profile`:
+1. **Cloud File Cleanup**: Queries all documents uploaded by this user and permanently removes their files from **Microsoft OneDrive** via Microsoft Graph API.
+2. **Database Cleanup**: In an atomic transaction, hard-deletes:
+   - All document records from `document_details`
+   - All session tokens from `refresh_tokens`
+   - The user profile record from `Rover_ledgers`
+
+**Request:**
+```http
+DELETE /users/profile
+Authorization: Bearer <token>
+```
+
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "message": "User account, all uploaded documents from OneDrive, and associated database records deleted successfully",
+  "data": {
+    "userId": "5096738d-1d77-4e4d-89b1-fd72cf5fd2da",
+    "email": "user@example.com",
+    "deletedDocumentsCount": 3,
+    "oneDriveFilesDeleted": 3,
+    "oneDriveFilesFailed": 0,
+    "deletedRefreshTokensCount": 1
+  }
+}
+```
 
 ### Updating User Profile
 **Request:**
@@ -386,9 +417,8 @@ flowchart LR
 | :--- | :--- | :---: | :--- |
 | `file` | File Binary | ✅ Yes | The actual file/image (accepts field name `file`, `document`, or `image`) |
 | `documentName` | String | ✅ Yes | Custom display name (e.g. `"Office Rent Invoice Oct 2026"`) |
-| `documentType` | String | ✅ Yes | Allowed values: `'income'` or `'expense'` |
+| `documentType` | String | ❌ No (Optional) | Allowed values: `'income'`, `'expense'`, or `null` |
 | `documentDate` | String (Date) | ✅ Yes | Format: `YYYY-MM-DD` (e.g. `"2026-10-29"`) |
-| `pdfCreated` | Boolean / String | ❌ Optional | `true` or `false` (default: `false`) |
 
 #### Frontend Code Example (JavaScript / React):
 ```javascript
@@ -397,7 +427,6 @@ formData.append('file', fileInput.files[0]);
 formData.append('documentName', 'Server Cloud Hosting');
 formData.append('documentType', 'expense');
 formData.append('documentDate', '2026-10-29');
-formData.append('pdfCreated', 'false');
 
 const response = await api.post('/documents/upload', formData, {
   headers: { 'Content-Type': 'multipart/form-data' },
@@ -416,7 +445,6 @@ const response = await api.post('/documents/upload', formData, {
     "fileSize": 1048576,
     "fileType": "application/pdf",
     "documentDate": "2026-10-29T00:00:00.000Z",
-    "pdfCreated": false,
     "softDelete": false,
     "createdAt": "2026-10-29T10:15:30.123Z",
     "updatedAt": "2026-10-29T10:15:30.123Z",
@@ -431,12 +459,37 @@ const response = await api.post('/documents/upload', formData, {
 
 ---
 
-### Fetch Active Documents for Authenticated User (Zero Filter Parameters Required)
+### Fetch Document Counts & Statistics API (NEW)
+- **Endpoint**: `GET /documents/counts` (or `GET /documents/count`)
+- **Headers**: `Authorization: Bearer <accessToken>` (Required)
+- **Description**: Returns all 4 aggregate counts strictly for the authenticated user based on their Bearer token:
+  1. `total`: Total active documents uploaded by the user
+  2. `incomeInvoiceCount`: Total active income invoices for this user
+  3. `expenseInvoiceCount`: Total active expense invoices for this user
+  4. `pdfCount`: Total active PDF documents
+
+#### Response Structure (`200 OK`):
+```json
+{
+  "success": true,
+  "message": "Document counts fetched successfully",
+  "data": {
+    "total": 42,
+    "incomeInvoiceCount": 24,
+    "expenseInvoiceCount": 18,
+    "pdfCount": 15
+  }
+}
+```
+
+---
+
+### Fetch Active Documents for Authenticated User
 - **Endpoint**: `GET /documents` (or `GET /rover-ledger/documents`)
 - **Headers**: `Authorization: Bearer <accessToken>` (Required)
 - **User Scoping**: Automatically extracts `UserId` from the Bearer Access Token.
-- **Query Parameters**: None required! Simply click **"Execute"** in Swagger (with Bearer token authorized) or make a GET request.
-- **Strict User Privacy**: Returns **only** the authenticated user's active documents (`softDelete: false AND uploadedBy = user.UserId`), and calculates `total`, `incomeInvoiceCount`, and `expenseInvoiceCount` strictly for this user!
+- **Description**: Returns the active documents (`softDelete: false AND uploadedBy = user.UserId`) for this user.
+- **Counts Removed**: Counts (`total`, `incomeInvoiceCount`, `expenseInvoiceCount`, `pdfCount`) have been moved to the dedicated `GET /documents/counts` API above for optimal performance and clean separation of concerns.
 
 #### Response Structure (`200 OK`):
 ```json
@@ -452,7 +505,6 @@ const response = await api.post('/documents/upload', formData, {
         "fileSize": 61,
         "fileType": "application/pdf",
         "documentDate": "2026-04-10T00:00:00.000Z",
-        "pdfCreated": true,
         "softDelete": false,
         "createdAt": "2026-10-29T10:13:02.013Z",
         "updatedAt": "2026-10-29T10:13:02.013Z",
@@ -460,20 +512,16 @@ const response = await api.post('/documents/upload', formData, {
         "oneDriveWebUrl": "https://techroverinc-my.sharepoint.com/...",
         "oneDriveDownloadUrl": "https://techroverinc-my.sharepoint.com/...",
         "originalFileName": "consulting_income.pdf",
-        "uploadedBy": "2857a21e-ace9-4188-bd47-18e39745940e"
+        "uploadedBy": "2857a21e-ace9-4188-bd47-18e39745940e",
+        "contentUrl": "/documents/98656735-4fd9-4784-876e-e98feca482f9/content",
+        "downloadUrl": "/documents/98656735-4fd9-4784-876e-e98feca482f9/download"
       }
     ],
-    "total": 13,
     "page": 1,
-    "limit": 13,
-    "totalPages": 1,
-    "incomeInvoiceCount": 5,
-    "expenseInvoiceCount": 8
+    "limit": 42
   }
 }
 ```
-
-> 💡 **Notice**: In addition to pagination metadata (`page`, `limit`, `totalPages`, `total`), the response returns **`incomeInvoiceCount`** and **`expenseInvoiceCount`** calculating the counts of all active income and expense records!
 
 ---
 
@@ -488,7 +536,6 @@ const response = await api.post('/documents/upload', formData, {
   "search": "invoice",
   "startDate": "2026-01-01",
   "endDate": "2026-12-31",
-  "pdfCreated": false,
   "fileType": "application/pdf",
   "page": 1,
   "limit": 10,
@@ -504,6 +551,30 @@ const response = await api.post('/documents/upload', formData, {
 ### Single Document Details
 - **Endpoint**: `GET /documents/:id`
 - **Description**: Returns full metadata of a document by its UUID. Verifies ownership if authenticated.
+
+---
+
+### Raw Image/Document Content Streaming (For Mobile App & PDF Generator)
+- **Endpoint**: `GET /documents/:id/content`
+- **Headers**: `Authorization: Bearer <rover_ledger_access_token>` (or query parameter `?token=<access_token>`)
+- **Description**: Exposes an authenticated proxy stream specifically designed for mobile image loaders, image rendering, and PDF generator libraries.
+  - The backend validates the Rover Ledger Bearer Token, fetches the file stream from Microsoft OneDrive using backend Microsoft credentials (which refresh automatically server-side), and streams the raw bytes directly to the client.
+  - Returns `Content-Disposition: inline` and proper MIME `Content-Type` (e.g. `image/png`, `image/jpeg`, `application/pdf`).
+  - **No Microsoft Graph credentials needed by the client** — the client only passes its active Rover Ledger bearer token.
+
+```mermaid
+sequenceDiagram
+    participant App as Mobile App / PDF Generator
+    participant BE as Rover Ledger BE
+    participant OD as Microsoft OneDrive / SharePoint
+
+    App->>BE: GET /documents/:id/content (Header: Bearer RoverLedgerToken)
+    Note over BE: Validates Rover Ledger Bearer token & document ownership
+    BE->>OD: GET /drives/:driveId/items/:itemId/content (Server-Side Microsoft Entra ID Token)
+    OD-->>BE: Raw File Stream + Content-Type (image/png, image/jpeg)
+    BE-->>App: Direct Binary Stream (Content-Disposition: inline)
+    Note over App: App feeds image bytes directly into PDF Generator!
+```
 
 ---
 
@@ -533,7 +604,7 @@ sequenceDiagram
 
 ### Single & Bulk Soft Deletion
 
-Rover Ledger uses **soft deletion** (`softDelete: true`). Soft-deleted records are retained in the database for auditing and history, but excluded from standard document listings and searches.
+Rover Ledger permanently removes the physical file from **Microsoft OneDrive** to free up cloud storage space, while marking `softDelete: true` in the database to preserve historical ledger auditing. Soft-deleted records are automatically excluded from standard document listings, counts, and search queries.
 
 #### 1. Single Delete:
 - **Endpoint**: `DELETE /documents/:id`
@@ -592,11 +663,10 @@ Rover Ledger uses **soft deletion** (`softDelete: true`). Soft-deleted records a
 | :--- | :--- | :--- |
 | `id` | UUID (PK) | Auto-generated unique document ID |
 | `documentName` | Varchar(255) | Name given to the document |
-| `documentType` | Varchar(50) | `'income'` or `'expense'` |
+| `documentType` | Varchar(50) | Allowed values: `'income'`, `'expense'`, or `null` |
 | `fileSize` | Bigint | Size of file in bytes |
 | `fileType` | Varchar(100) | MIME type (e.g. `application/pdf`, `image/jpeg`) |
 | `documentDate` | Timestamp | Date of financial record |
-| `pdfCreated` | Boolean | Flag if converted to/generated as PDF |
 | `softDelete` | Boolean | Soft deletion flag (default `false`) |
 | `oneDriveItemId` | Varchar(255) | Unique item ID inside Microsoft OneDrive |
 | `oneDriveWebUrl` | Text | Web browser link to file in OneDrive |
@@ -646,7 +716,148 @@ The backend includes a live Swagger UI:
   - For rapid UI prototyping: Call `POST /auth/microsoft` with `{"code": "dummy_code"}`.
   - For production: Integrate `@azure/msal-browser` and pass the obtained `accessToken` to `POST /auth/microsoft`.
 - [ ] **Store JWT Token**: Store `data.token` securely in storage and attach to the `Authorization: Bearer <token>` header.
-- [ ] **File Upload**: Use `FormData` with field `file`, `documentName`, `documentType` (`income`/`expense`), and `documentDate` (`YYYY-MM-DD`).
+- [ ] **File Upload**: Use `FormData` with field `file`, `documentName`, `documentDate` (`YYYY-MM-DD`), and optional `documentType` (`'income'`, `'expense'`, or `null`).
 - [ ] **File Preview / Download**: Use `/documents/:id/download?inline=true` directly inside `<img src="...">` or PDF viewers.
 - [ ] **Bulk Deletion**: Pass `{ "ids": ["id1", "id2"] }` to `DELETE /documents/bulk`.
 
+
+
+---
+
+## 11. Google Drive Integration ("Share with CA")
+
+### 11.1 Architecture & Flow Summary
+- **Employees**: Continue logging in via their Microsoft Entra ID corporate account. No personal Google accounts are required.
+- **Chartered Accountant (CA)**: Receives a shared folder (`Rover Ledger - CA Invoices`) directly inside their personal Gmail (`Google Drive` ➔ `Shared with me`). The CA does not log into Rover Ledger or authorize any apps.
+- **Company Google Drive**: Connected once via OAuth 2.0 (`GET /auth/google/connect`). The backend securely encrypts the refresh token using AES-256-GCM at rest and re-uses it indefinitely.
+- **Invoice Transfer**: When an employee shares an invoice (`POST /documents/:id/share-to-ca`), the backend streams the PDF directly from Microsoft OneDrive and uploads it to the CA shared Google Drive folder using standard Google Drive v3 multipart upload.
+
+---
+
+### 11.2 Google Drive Endpoints
+
+#### 1. Check Google Drive Connection Status
+- **Endpoint**: `GET /auth/google/status`
+- **Use Case**: Used by the Frontend Profile Screen to determine whether the "Connect Google Drive" button should be displayed or if Google Drive is already connected.
+- **Response (`200 OK`)**:
+```json
+{
+  "success": true,
+  "message": "Google Drive connection status retrieved",
+  "data": {
+    "isConnected": true,
+    "googleEmail": "company.drive@gmail.com",
+    "caEmail": "ca@roverledger.com",
+    "targetFolderId": "1lY9...folderId"
+  }
+}
+```
+
+#### 2. Connect Google Drive (OAuth 2.0)
+- **Endpoint**: `GET /auth/google/connect`
+- **Query Parameters**:
+  - `redirect=false` (Optional): Returns a JSON payload containing `{ authUrl }` for mobile / web apps to open in a browser or `expo-web-browser`.
+  - `caEmail` (Optional): Target CA email to share folder with (defaults to `CA_EMAIL_DEFAULT` from environment).
+- **Default Behavior**: Redirects (HTTP 302) to Google's OAuth 2.0 Consent Screen.
+- **JSON Response (`redirect=false`)**:
+```json
+{
+  "success": true,
+  "message": "Google authorization URL generated",
+  "data": {
+    "authUrl": "https://accounts.google.com/o/oauth2/v2/auth?client_id=...&access_type=offline&prompt=consent..."
+  }
+}
+```
+
+#### 3. Google OAuth Callback
+- **Endpoint**: `GET /auth/google/callback` (or alias `GET /api/google/callback`)
+- **Description**: Google redirects here with `?code=...`. The backend exchanges the code for tokens, encrypts the refresh token, initializes the "Rover Ledger - CA Invoices" folder, and shares it with the CA email.
+
+#### 4. Disconnect Google Drive
+- **Endpoint**: `POST /auth/google/disconnect`
+- **Description**: Marks the connection inactive and revokes cached access tokens.
+
+---
+
+### 11.3 Share Document with CA API
+- **Endpoint**: `POST /documents/:id/share-to-ca`
+- **Headers**: `Authorization: Bearer <accessToken>` (Optional / Recommended)
+- **Parameters**: `id` - Document UUID to share.
+- **Workflow**:
+  1. Validates document ownership and existence.
+  2. Idempotency check: If already shared, returns immediately without re-uploading.
+  3. Verifies company Google Drive connection.
+  4. Streams original PDF from Microsoft OneDrive.
+  5. Uploads directly into the target CA Google Drive folder.
+  6. Stores share audit record in `document_ca_shares` database table.
+
+#### Success Response (`201 Created` or `200 OK` if already shared):
+```json
+{
+  "success": true,
+  "message": "Document shared with CA successfully.",
+  "data": {
+    "alreadyShared": false,
+    "message": "Document shared with CA successfully.",
+    "share": {
+      "id": "035db723-5291-498d-bdfb-c0369ab84122",
+      "documentId": "617f92da-c09e-4355-916e-17998f17eaa3",
+      "googleDriveFileId": "1lY9...fileId",
+      "googleDriveWebViewLink": "https://drive.google.com/file/d/1lY9.../view",
+      "caEmail": "ca@roverledger.com",
+      "sharedByUserId": "8f039082-de2f-4403-b5e4-be7ad38bde1e",
+      "sharedAt": "2026-11-05T12:00:00.000Z"
+    },
+    "document": {
+      "id": "617f92da-c09e-4355-916e-17998f17eaa3",
+      "documentName": "April Consulting Invoice",
+      "isSharedWithCa": true,
+      "sharedWithCaAt": "2026-11-05T12:00:00.000Z",
+      "googleDriveFileId": "1lY9...fileId",
+      "googleDriveViewUrl": "https://drive.google.com/file/d/1lY9.../view"
+    }
+  }
+}
+```
+
+---
+
+### 11.4 Embedded CA Share Status in Document Responses
+You do **NOT** need to call a separate status API to know if an invoice is shared with the CA.
+Every document returned by `GET /documents`, `POST /documents/filter`, and `GET /documents/:id` automatically includes these 4 share properties:
+
+```json
+{
+  "id": "617f92da-c09e-4355-916e-17998f17eaa3",
+  "documentName": "April Consulting Invoice",
+  "documentType": "income",
+  "fileSize": 102400,
+  "isSharedWithCa": true,
+  "sharedWithCaAt": "2026-11-05T12:00:00.000Z",
+  "googleDriveFileId": "1lY9...fileId",
+  "googleDriveViewUrl": "https://drive.google.com/file/d/1lY9.../view",
+  "contentUrl": "/documents/617f92da-c09e-4355-916e-17998f17eaa3/content",
+  "downloadUrl": "/documents/617f92da-c09e-4355-916e-17998f17eaa3/download"
+}
+```
+
+---
+
+### 11.5 Frontend Implementation Guide
+
+#### 1. In the Profile / Settings Menu
+1. Call `GET /auth/google/status`.
+2. If `data.isConnected === false`:
+   - Display a **"Connect Google Drive"** button.
+   - When tapped, fetch the URL from `GET /auth/google/connect?redirect=false` and open it via `WebBrowser.openAuthSessionAsync(authUrl)`.
+3. If `data.isConnected === true`:
+   - Display **"Google Drive Connected: {data.googleEmail}"** with an optional **"Disconnect"** button (`POST /auth/google/disconnect`).
+
+#### 2. In Invoice List & Details Screen
+1. Check `document.isSharedWithCa`:
+   - If `true`: Show a green **"Shared with CA"** badge and optionally a button to open `document.googleDriveViewUrl`.
+   - If `false`: Show a **"Share with CA"** button.
+2. When the user taps **"Share with CA"**:
+   - Make a `POST /documents/:id/share-to-ca` request.
+   - On success (200 / 201), update the UI state to `isSharedWithCa: true` and show a success toast.

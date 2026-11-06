@@ -1,11 +1,11 @@
 const axios = require('axios');
-require('dotenv').config();
+const { env } = require('../configs/env');
 
-const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
-const TENANT_ID = process.env.MICROSOFT_TENANT_ID;
-const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
-const DRIVE_ID = process.env.MICROSOFT_DRIVE_ID;
-const FOLDER_ID = process.env.MICROSOFT_FOLDER_ID;
+const CLIENT_ID = env.microsoftClientId;
+const TENANT_ID = env.microsoftTenantId;
+const CLIENT_SECRET = env.microsoftClientSecret;
+const DRIVE_ID = env.microsoftDriveId;
+const FOLDER_ID = env.microsoftFolderId;
 
 // In-memory cache for Microsoft Graph application access token
 let cachedToken = null;

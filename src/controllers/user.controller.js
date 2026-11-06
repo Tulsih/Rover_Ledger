@@ -58,6 +58,33 @@ class UserController {
       return sendError(res, 400, error.message);
     }
   }
+
+  /**
+   * API: Permanent Account Deletion (Option A)
+   * 
+   * Endpoint: DELETE /users/profile (or DELETE /profile)
+   * Headers: Authorization: Bearer <JWT_TOKEN>
+   * 
+   * Permanently deletes user account, all associated OneDrive files, and database records.
+   */
+  async deleteProfile(req, res, next) {
+    try {
+      const userId = req.user.UserId;
+
+      const result = await userService.deleteUserAccount(userId);
+
+      return sendSuccess(
+        res,
+        200,
+        'User account, all uploaded documents from OneDrive, and associated database records deleted successfully',
+        result
+      );
+    } catch (error) {
+      console.error('[UserController.deleteProfile Error]:', error.message);
+      const statusCode = error.statusCode || 500;
+      return sendError(res, statusCode, error.message);
+    }
+  }
 }
 
 module.exports = new UserController();

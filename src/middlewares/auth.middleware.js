@@ -7,27 +7,32 @@ const { verifyAccessToken } = require('../utils/jwt.util');
  * Attaches the authenticated user payload to `req.user`.
  */
 const authenticateToken = (req, res, next) => {
+  let token = null;
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
 
-  if (!authHeader) {
+  if (authHeader) {
+    // Expecting format: "Bearer <token>"
+    const parts = authHeader.split(' ');
+    if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
+      token = parts[1];
+    } else {
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_TOKEN_FORMAT',
+        message: 'Invalid authorization format. Format must be: Bearer <token>',
+      });
+    }
+  } else if (req.query && (req.query.token || req.query.auth_token)) {
+    token = req.query.token || req.query.auth_token;
+  }
+
+  if (!token) {
     return res.status(401).json({
       success: false,
       code: 'NO_TOKEN_PROVIDED',
       message: 'Access denied. No authorization token provided.',
     });
   }
-
-  // Expecting format: "Bearer <token>"
-  const parts = authHeader.split(' ');
-  if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') {
-    return res.status(401).json({
-      success: false,
-      code: 'INVALID_TOKEN_FORMAT',
-      message: 'Invalid authorization format. Format must be: Bearer <token>',
-    });
-  }
-
-  const token = parts[1];
 
   try {
     const decoded = verifyAccessToken(token);
@@ -53,18 +58,25 @@ const authenticateToken = (req, res, next) => {
 /**
  * Optional Authentication Middleware
  * 
- * Attaches user to req.user if a valid token is present, but does not block requests without token.
+ * Attaches user to req.user if a valid token is present in Authorization header or query parameter,
+ * but does not block requests without token.
  */
 const optionalAuth = (req, res, next) => {
+  let token = null;
   const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-  if (!authHeader) {
-    return next();
+
+  if (authHeader) {
+    const parts = authHeader.split(' ');
+    if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
+      token = parts[1];
+    }
+  } else if (req.query && (req.query.token || req.query.auth_token)) {
+    token = req.query.token || req.query.auth_token;
   }
 
-  const parts = authHeader.split(' ');
-  if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
+  if (token) {
     try {
-      const decoded = verifyAccessToken(parts[1]);
+      const decoded = verifyAccessToken(token);
       req.user = decoded;
     } catch (e) {
       // For optional auth, continue even if token is invalid or expired

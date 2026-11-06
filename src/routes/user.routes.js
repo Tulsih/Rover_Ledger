@@ -18,4 +18,7 @@ router.get('/profile', authenticateToken, userController.getProfile.bind(userCon
 router.put('/profile', authenticateToken, userController.updateProfile.bind(userController));
 router.patch('/profile', authenticateToken, userController.updateProfile.bind(userController));
 
+// Permanent Account Deletion: Delete user, uploaded OneDrive files, and all DB records
+router.delete('/profile', authenticateToken, userController.deleteProfile.bind(userController));
+
 module.exports = router;

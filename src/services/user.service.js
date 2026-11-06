@@ -1,4 +1,8 @@
 const userRepository = require('../repositories/user.repository');
+const documentRepository = require('../repositories/document.repository');
+const refreshTokenRepository = require('../repositories/refreshToken.repository');
+const onedriveService = require('./onedrive.service');
+const { db } = require('../db');
 
 /**
  * User Service
@@ -98,6 +102,69 @@ class UserService {
       isActive: updatedUser.isActive,
       CreatedAt: updatedUser.CreatedAt,
       UpdatedAt: updatedUser.UpdatedAt,
+    };
+  }
+
+  /**
+   * Permanently delete user account, all uploaded OneDrive files, and all associated database records (Option A)
+   * 
+   * @param {string} userId - User's unique ID
+   * @returns {Promise<object>} Summary of deleted resources
+   */
+  async deleteUserAccount(userId) {
+    const existingUser = await userRepository.findById(userId);
+
+    if (!existingUser) {
+      const err = new Error('User not found or account has already been deleted');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    // 1. Fetch all documents uploaded by this user (including soft-deleted)
+    const userDocs = await documentRepository.findAllByUploadedBy(userId);
+    console.log(`🗑️ Initiating permanent cascading deletion for User ${userId} (${existingUser.Email}). Found ${userDocs.length} documents.`);
+
+    // 2. Delete physical files from Microsoft OneDrive
+    let oneDriveDeletedCount = 0;
+    let oneDriveErrorCount = 0;
+
+    for (const doc of userDocs) {
+      if (doc.oneDriveItemId) {
+        try {
+          await onedriveService.deleteFileFromOneDrive(doc.oneDriveItemId);
+          oneDriveDeletedCount++;
+          console.log(`   Deleted OneDrive file ${doc.oneDriveItemId} (${doc.originalFileName || doc.documentName})`);
+        } catch (oneDriveErr) {
+          oneDriveErrorCount++;
+          console.warn(`   Warning: Could not delete OneDrive item ${doc.oneDriveItemId}:`, oneDriveErr.message);
+        }
+      }
+    }
+
+    // 3. Delete database records atomically within a transaction
+    let deletedDocsCount = 0;
+    let deletedTokensCount = 0;
+
+    await db.transaction(async (tx) => {
+      // a. Delete all document details records
+      deletedDocsCount = await documentRepository.deleteByUploadedBy(userId, tx);
+
+      // b. Delete all refresh tokens / sessions
+      deletedTokensCount = await refreshTokenRepository.deleteByUserId(userId, tx);
+
+      // c. Delete the user record from Rover_ledgers
+      await userRepository.deleteById(userId, tx);
+    });
+
+    console.log(`✅ User ${userId} and all associated data permanently deleted.`);
+
+    return {
+      userId,
+      email: existingUser.Email,
+      deletedDocumentsCount: deletedDocsCount,
+      oneDriveFilesDeleted: oneDriveDeletedCount,
+      oneDriveFilesFailed: oneDriveErrorCount,
+      deletedRefreshTokensCount: deletedTokensCount,
     };
   }
 }

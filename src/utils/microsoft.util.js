@@ -1,10 +1,10 @@
 const axios = require('axios');
-require('dotenv').config();
+const { env } = require('../configs/env');
 
-const CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
-const TENANT_ID = process.env.MICROSOFT_TENANT_ID;
-const CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
-const REDIRECT_URI = process.env.MICROSOFT_REDIRECT_URI || 'roverledger://auth';
+const CLIENT_ID = env.microsoftClientId;
+const TENANT_ID = env.microsoftTenantId;
+const CLIENT_SECRET = env.microsoftClientSecret;
+const REDIRECT_URI = env.microsoftRedirectUri || 'roverledger://auth';
 
 /**
  * Generate Microsoft OAuth 2.0 Authorization URL

@@ -7,11 +7,10 @@ const { pgTable, uuid, varchar, boolean, timestamp, text, bigint } = require('dr
 const DocumentDetails = pgTable('document_details', {
   id: uuid('id').defaultRandom().primaryKey(),
   documentName: varchar('documentName', { length: 255 }).notNull(),
-  documentType: varchar('documentType', { length: 50 }).notNull(), // 'income' or 'expense'
+  documentType: varchar('documentType', { length: 50 }), // optional: 'income', 'expense', or null
   fileSize: bigint('fileSize', { mode: 'number' }).notNull(), // size in bytes
   fileType: varchar('fileType', { length: 100 }).notNull(), // MIME type (e.g. image/jpeg, application/pdf)
   documentDate: timestamp('documentDate').notNull(), // Date of document entered by user
-  pdfCreated: boolean('pdfCreated').default(false).notNull(), // boolean: true or false
   softDelete: boolean('softDelete').default(false).notNull(), // soft delete flag
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().notNull(),

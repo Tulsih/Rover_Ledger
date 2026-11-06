@@ -86,6 +86,22 @@ class RefreshTokenRepository {
 
     return result;
   }
+
+  /**
+   * Permanently delete all refresh tokens for a specific user
+   * @param {string} userId
+   * @param {object|null} tx - Optional transaction handle
+   * @returns {Promise<number>} Count of deleted tokens
+   */
+  async deleteByUserId(userId, tx = null) {
+    if (!userId) return 0;
+    const executor = tx || db;
+    const deleted = await executor
+      .delete(RefreshTokens)
+      .where(eq(RefreshTokens.userId, userId))
+      .returning({ id: RefreshTokens.id });
+    return deleted.length;
+  }
 }
 
 module.exports = new RefreshTokenRepository();

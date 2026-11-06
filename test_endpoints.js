@@ -258,6 +258,65 @@ async function runTests() {
     }
     console.log('   ✅ Profile fetch verified: Database retains updated profile across sessions without being overwritten.\n');
 
+    // 9. Testing Permanent Cascading Account Deletion (DELETE /users/profile - Option A)
+    console.log('9️⃣ Testing Permanent Cascading Account Deletion (DELETE /users/profile)...');
+
+    // Insert a test document in document_details for createdUser
+    const testDocInsert = await pool.query(
+      `INSERT INTO document_details ("documentName", "fileSize", "fileType", "documentDate", "oneDriveItemId", "originalFileName", "uploadedBy")
+       VALUES ($1, $2, $3, NOW(), $4, $5, $6) RETURNING id`,
+      ['Deletion Test Doc', 100, 'application/pdf', 'mock_onedrive_item_123', 'test.pdf', createdUser.UserId]
+    );
+    const testDocId = testDocInsert.rows[0].id;
+
+    // Insert a test refresh token in refresh_tokens for createdUser
+    await pool.query(
+      `INSERT INTO refresh_tokens ("userId", "tokenHash", "expiresAt")
+       VALUES ($1, $2, NOW() + INTERVAL '1 day')`,
+      [createdUser.UserId, 'test_hash_for_deletion_' + Date.now()]
+    );
+
+    // Call DELETE /users/profile with userToken
+    const deleteRes = await makeRequest('/users/profile', 'DELETE', null, userToken);
+    console.log('   DELETE /users/profile Response:', deleteRes.data);
+
+    if (deleteRes.status !== 200 || !deleteRes.data.success) {
+      throw new Error(`DELETE /users/profile failed with status ${deleteRes.status}`);
+    }
+
+    if (deleteRes.data.data.deletedDocumentsCount < 1) {
+      throw new Error('Expected deletedDocumentsCount to be >= 1');
+    }
+    if (deleteRes.data.data.deletedRefreshTokensCount < 1) {
+      throw new Error('Expected deletedRefreshTokensCount to be >= 1');
+    }
+
+    // Verify user is permanently deleted from Rover_ledgers
+    const userCheck = await pool.query(`SELECT * FROM "Rover_ledgers" WHERE "UserId" = $1`, [createdUser.UserId]);
+    if (userCheck.rows.length !== 0) {
+      throw new Error('User record was not deleted from Rover_ledgers table');
+    }
+
+    // Verify documents are permanently deleted from document_details
+    const docCheck = await pool.query(`SELECT * FROM document_details WHERE "id" = $1`, [testDocId]);
+    if (docCheck.rows.length !== 0) {
+      throw new Error('User document was not deleted from document_details table');
+    }
+
+    // Verify refresh tokens are permanently deleted from refresh_tokens
+    const tokenCheck = await pool.query(`SELECT * FROM refresh_tokens WHERE "userId" = $1`, [createdUser.UserId]);
+    if (tokenCheck.rows.length !== 0) {
+      throw new Error('User refresh tokens were not deleted from refresh_tokens table');
+    }
+
+    // Verify calling GET /users/profile with deleted user's token now returns 404
+    const getDeletedProfileRes = await makeRequest('/users/profile', 'GET', null, userToken);
+    if (getDeletedProfileRes.status !== 404) {
+      throw new Error(`Expected 404 for deleted user profile fetch, got ${getDeletedProfileRes.status}`);
+    }
+
+    console.log('   ✅ Permanent Cascading Account Deletion verified: User, documents, and tokens completely purged!\n');
+
     console.log('🎉 ALL TESTS PASSED SUCCESSFULLY! Everything is functioning properly.\n');
   } catch (err) {
     console.error('❌ Test failed:', err);

@@ -17,14 +17,6 @@ router.post(
   documentController.uploadDocument.bind(documentController)
 );
 
-// Alias: POST /documents
-router.post(
-  '/',
-  optionalAuth,
-  uploadDocumentFile,
-  documentController.uploadDocument.bind(documentController)
-);
-
 // 2. Filter documents (accepts only req.body, supports authtoken scoping)
 router.post(
   '/filter',
@@ -32,67 +24,60 @@ router.post(
   documentController.filterDocuments.bind(documentController)
 );
 
-// GET /filter alias reading req.body
+// 3. Document Counts API: Fetch all 4 counts (total, incomeInvoiceCount, expenseInvoiceCount, pdfCount)
 router.get(
-  '/filter',
-  optionalAuth,
-  documentController.filterDocuments.bind(documentController)
+  '/counts',
+  authenticateToken,
+  documentController.getDocumentCounts.bind(documentController)
 );
 
-// 3. Fetch all active documents for authenticated user based on access token
+// 4. Fetch all active documents for authenticated user based on access token
 router.get(
   '/',
   authenticateToken,
   documentController.getAllDocuments.bind(documentController)
 );
 
-// 4. Download / stream document binary file content from OneDrive
+// 5. Stream raw document / image content directly for PDF generator & image renderers (inline)
+router.get(
+  '/:id/content',
+  optionalAuth,
+  documentController.getDocumentContent.bind(documentController)
+);
+
+// 6. Download / stream document binary file content from OneDrive (attachment)
 router.get(
   '/:id/download',
   optionalAuth,
   documentController.downloadDocument.bind(documentController)
 );
 
-// Alias: GET /documents/:id/file
-router.get(
-  '/:id/file',
-  optionalAuth,
-  documentController.downloadDocument.bind(documentController)
-);
-
-// 5. Fetch single document details by ID (supports authtoken check)
-router.get(
-  '/:id',
-  optionalAuth,
-  documentController.getDocumentById.bind(documentController)
-);
-
-// 6. Bulk soft delete documents (mounted before /:id to prevent route shadowing)
+// 7. Bulk soft delete documents (mounted before /:id to prevent route shadowing)
 router.delete(
   '/bulk',
   optionalAuth,
   documentController.bulkSoftDeleteDocuments.bind(documentController)
 );
 
-// Alias: POST /documents/bulk-delete (for clients/environments where DELETE does not carry a body)
-router.post(
-  '/bulk-delete',
+// 8. Fetch single document details by ID (supports authtoken check)
+router.get(
+  '/:id',
   optionalAuth,
-  documentController.bulkSoftDeleteDocuments.bind(documentController)
+  documentController.getDocumentById.bind(documentController)
 );
 
-// Alias: DELETE /documents (with request body)
-router.delete(
-  '/',
-  optionalAuth,
-  documentController.bulkSoftDeleteDocuments.bind(documentController)
-);
-
-// 7. Soft delete single document by ID (supports authtoken check)
+// 9. Soft delete single document by ID (supports authtoken check)
 router.delete(
   '/:id',
   optionalAuth,
   documentController.softDeleteDocument.bind(documentController)
+);
+
+// 10. Share single document with CA via Google Drive
+router.post(
+  '/:id/share-to-ca',
+  optionalAuth,
+  documentController.shareToCa.bind(documentController)
 );
 
 module.exports = router;

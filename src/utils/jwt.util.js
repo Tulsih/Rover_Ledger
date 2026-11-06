@@ -1,115 +1,175 @@
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-require('dotenv').config();
+const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 
-const JWT_SECRET = process.env.JWT_SECRET || 'rover_ledger_super_secret_jwt_key_2026';
+const { env } = require("../configs/env");
+const { errorConstants } = require("../constants/errorConstants");
+const { UnauthorizedException } = require("../exceptions/appError");
 
-// Access Token configuration (Short-lived: default 15m)
-const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || JWT_SECRET;
-const JWT_ACCESS_EXPIRES_IN = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
-
-// Refresh Token configuration (Long-lived: default 7d)
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'rover_ledger_refresh_secret_key_2026';
-const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
-
-/**
- * Helper to parse time string (e.g. '15m', '7d', '1h', '900s') into seconds
- */
-const parseExpiresInSeconds = (durationStr) => {
-  if (typeof durationStr === 'number') return durationStr;
-  const match = String(durationStr).match(/^(\d+)([smhd])$/);
-  if (!match) return 900;
-  const val = parseInt(match[1], 10);
-  const unit = match[2];
-  switch (unit) {
-    case 's': return val;
-    case 'm': return val * 60;
-    case 'h': return val * 3600;
-    case 'd': return val * 86400;
-    default: return 900;
+function getSecret() {
+  if (!env.jwtSecret && !env.jwtAccessSecret) {
+    throw new Error("JWT_SECRET is required");
   }
-};
 
-/**
- * Generate a short-lived Access Token for API authorization
- * Embeds unique `jti` to ensure unique signatures across rapid calls
- * @param {object} payload - { UserId, Email, Role }
- * @returns {string} Signed JWT Access Token
- */
-const generateAccessToken = (payload) => {
-  return jwt.sign(
-    {
-      ...payload,
-      jti: crypto.randomUUID(),
-    },
-    JWT_ACCESS_SECRET,
-    {
-      expiresIn: JWT_ACCESS_EXPIRES_IN,
+  return env.jwtAccessSecret || env.jwtSecret;
+}
+
+function getRefreshSecret() {
+  return env.jwtRefreshSecret || getSecret();
+}
+
+function getBaseOptions() {
+  const options = {};
+
+  if (env.jwtIssuer) {
+    options.issuer = env.jwtIssuer;
+  }
+
+  if (env.jwtAudience) {
+    options.audience = env.jwtAudience;
+  }
+
+  return options;
+}
+
+class JwtUtils {
+  static generateAccessToken(payload, options = {}) {
+    return jwt.sign(
+      {
+        ...payload,
+        tokenType: "access",
+        jti: crypto.randomUUID(),
+      },
+      getSecret(),
+      {
+        ...getBaseOptions(),
+        expiresIn: env.jwtAccessExpiresIn,
+        ...options,
+      }
+    );
+  }
+
+  static generateRefreshToken(payload, options = {}) {
+    return jwt.sign(
+      {
+        ...payload,
+        tokenType: "refresh",
+        jti: crypto.randomUUID(),
+      },
+      getRefreshSecret(),
+      {
+        ...getBaseOptions(),
+        expiresIn: env.jwtRefreshExpiresIn,
+        ...options,
+      }
+    );
+  }
+
+  static verifyAccessToken(token) {
+    try {
+      const payload = jwt.verify(token, getSecret(), getBaseOptions());
+      if (payload.tokenType && payload.tokenType !== "access") {
+        throw new UnauthorizedException(errorConstants.INVALID_TOKEN);
+      }
+      return payload;
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      if (error.name === "TokenExpiredError") {
+        const expiredErr = new UnauthorizedException(errorConstants.TOKEN_EXPIRED, "TOKEN_EXPIRED");
+        expiredErr.name = "TokenExpiredError";
+        throw expiredErr;
+      }
+      throw new UnauthorizedException(errorConstants.INVALID_TOKEN);
     }
-  );
-};
+  }
 
-/**
- * Generate a long-lived Refresh Token for obtaining new Access Tokens
- * Embeds unique `jti` to guarantee uniqueness for database hashing
- * @param {object} payload - { UserId, Email, Role }
- * @returns {string} Signed JWT Refresh Token
- */
-const generateRefreshToken = (payload) => {
-  return jwt.sign(
-    {
-      ...payload,
-      jti: crypto.randomUUID(),
-    },
-    JWT_REFRESH_SECRET,
-    {
-      expiresIn: JWT_REFRESH_EXPIRES_IN,
+  static verifyRefreshToken(token) {
+    try {
+      const payload = jwt.verify(token, getRefreshSecret(), getBaseOptions());
+
+      if (payload.tokenType !== "refresh") {
+        throw new UnauthorizedException(errorConstants.INVALID_REFRESH_TOKEN);
+      }
+
+      return payload;
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      if (error.name === "TokenExpiredError") {
+        const expiredErr = new UnauthorizedException(errorConstants.REFRESH_TOKEN_EXPIRED, "REFRESH_TOKEN_EXPIRED");
+        expiredErr.name = "TokenExpiredError";
+        throw expiredErr;
+      }
+
+      throw new UnauthorizedException(errorConstants.INVALID_REFRESH_TOKEN);
     }
-  );
-};
+  }
 
-/**
- * Verify and decode an Access Token
- * @param {string} token
- * @returns {object} Decoded token payload
- */
-const verifyAccessToken = (token) => {
-  return jwt.verify(token, JWT_ACCESS_SECRET);
-};
+  static getBearerToken(authorizationHeader) {
+    if (!authorizationHeader) {
+      throw new UnauthorizedException(errorConstants.MISSING_AUTH_HEADER);
+    }
 
-/**
- * Verify and decode a Refresh Token
- * @param {string} token
- * @returns {object} Decoded token payload
- */
-const verifyRefreshToken = (token) => {
-  return jwt.verify(token, JWT_REFRESH_SECRET);
-};
+    const [scheme, token] = authorizationHeader.split(" ");
 
-/**
- * Cryptographically hash a refresh token using SHA-256 before database storage
- * @param {string} token
- * @returns {string} Hex-encoded SHA-256 hash
- */
-const hashToken = (token) => {
-  return crypto.createHash('sha256').update(String(token).trim()).digest('hex');
-};
+    if (scheme !== "Bearer" || !token) {
+      throw new UnauthorizedException(errorConstants.INVALID_TOKEN);
+    }
 
-/**
- * Backward compatibility aliases
- */
-const generateToken = (payload) => generateAccessToken(payload);
-const verifyToken = (token) => verifyAccessToken(token);
+    return token;
+  }
 
-module.exports = {
-  generateAccessToken,
-  generateRefreshToken,
-  verifyAccessToken,
-  verifyRefreshToken,
-  hashToken,
-  generateToken,
-  verifyToken,
-  parseExpiresInSeconds,
-  JWT_ACCESS_EXPIRES_IN,
-  JWT_REFRESH_EXPIRES_IN,
-};
+  /**
+   * Generates SHA-256 hash of a token for secure database storage
+   */
+  static hashToken(token) {
+    return crypto.createHash("sha256").update(String(token).trim()).digest("hex");
+  }
+
+  /**
+   * Helper to parse time string (e.g. '15m', '7d', '1h', '900s') into seconds
+   */
+  static parseExpiresInSeconds(durationStr) {
+    if (typeof durationStr === "number") return durationStr;
+    const match = String(durationStr).match(/^(\d+)([smhd])$/);
+    if (!match) return 900;
+    const val = parseInt(match[1], 10);
+    const unit = match[2];
+    switch (unit) {
+      case "s": return val;
+      case "m": return val * 60;
+      case "h": return val * 3600;
+      case "d": return val * 86400;
+      default: return 900;
+    }
+  }
+
+  // Backward compatibility alias methods
+  static generateToken(payload, options = {}) {
+    return JwtUtils.generateAccessToken(payload, options);
+  }
+
+  static verifyToken(token) {
+    return JwtUtils.verifyAccessToken(token);
+  }
+}
+
+// Attach duration constants to JwtUtils class
+JwtUtils.JWT_ACCESS_EXPIRES_IN = env.jwtAccessExpiresIn;
+JwtUtils.JWT_REFRESH_EXPIRES_IN = env.jwtRefreshExpiresIn;
+
+// Destructuring & backward compatibility exports
+module.exports = JwtUtils;
+module.exports.generateAccessToken = JwtUtils.generateAccessToken;
+module.exports.generateRefreshToken = JwtUtils.generateRefreshToken;
+module.exports.verifyAccessToken = JwtUtils.verifyAccessToken;
+module.exports.verifyRefreshToken = JwtUtils.verifyRefreshToken;
+module.exports.getBearerToken = JwtUtils.getBearerToken;
+module.exports.hashToken = JwtUtils.hashToken;
+module.exports.parseExpiresInSeconds = JwtUtils.parseExpiresInSeconds;
+module.exports.generateToken = JwtUtils.generateToken;
+module.exports.verifyToken = JwtUtils.verifyToken;
+module.exports.JWT_ACCESS_EXPIRES_IN = JwtUtils.JWT_ACCESS_EXPIRES_IN;
+module.exports.JWT_REFRESH_EXPIRES_IN = JwtUtils.JWT_REFRESH_EXPIRES_IN;

@@ -14,6 +14,8 @@ const {
   exchangeCodeForTokens,
   fetchUserProfileFromGraph,
 } = require('../utils/microsoft.util');
+const { env } = require('../configs/env');
+const { isMockAuthCode, getMockUserProfile } = require('../utils/mockAuth.util');
 
 /**
  * Authentication Service
@@ -42,23 +44,10 @@ class AuthService {
     let msProfile;
     console.log('[Login with Microsoft] Request Body:', { code, accessToken, redirectUri, codeVerifier });
 
-    // Check if a dummy testing code is provided (e.g. for Swagger UI testing without a live Microsoft account)
-    const isDummyCode =
-      code &&
-      ['dummy_code', 'dummy', 'shraddha', 'shraddha_chauhan', 'test_code', 'demo'].includes(
-        code.trim().toLowerCase()
-      );
-
-    if (isDummyCode) {
-      console.log('🧪 Using Dummy Microsoft Login for Testing (User: Shraddha Chauhan)');
-      msProfile = {
-        firstName: 'Shraddha',
-        lastName: 'Chauhan',
-        fullName: 'Shraddha Chauhan',
-        email: 'shraddha.chauhan@roverledger.com',
-        designation: 'Software Engineer',
-        gender: 'Female',
-      };
+    // In development or test environments, allow isolated mock login if enabled
+    if (env.enableMockLogin && isMockAuthCode(code)) {
+      console.log('🧪 Using Development Mock Login for Testing');
+      msProfile = getMockUserProfile(code);
     } else {
       let token = accessToken;
 

@@ -20,6 +20,8 @@ servers:
 tags:
   - name: Authentication
     description: Microsoft OAuth 2.0 login and token handling
+  - name: Google Drive Integration
+    description: Connect company Google Drive and share documents with CA
   - name: User Profile
     description: Authenticated user profile retrieval and modification
   - name: Document Management
@@ -298,6 +300,63 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - User Profile
+      summary: Delete Account & All Associated Data (Hard Delete)
+      description: |
+        Permanently deletes the currently authenticated user's account:
+        1. Queries all documents uploaded by this user.
+        2. Deletes physical files from Microsoft OneDrive.
+        3. Deletes document records from `document_details`.
+        4. Deletes active sessions from `refresh_tokens`.
+        5. Permanently deletes the user record from `Rover_ledgers`.
+      operationId: deleteProfile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User account, uploaded OneDrive files, and database records permanently deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: User account, all uploaded documents from OneDrive, and associated database records deleted successfully
+                  data:
+                    type: object
+                    properties:
+                      userId:
+                        type: string
+                        format: uuid
+                      email:
+                        type: string
+                      deletedDocumentsCount:
+                        type: integer
+                      oneDriveFilesDeleted:
+                        type: integer
+                      oneDriveFilesFailed:
+                        type: integer
+                      deletedRefreshTokensCount:
+                        type: integer
+        '401':
+          description: Unauthorized. Missing or invalid Bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found or account has already been deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   # ==========================================
   # SYSTEM ENDPOINTS
   # ==========================================
@@ -359,7 +418,6 @@ paths:
               required:
                 - file
                 - documentName
-                - documentType
                 - documentDate
               properties:
                 file:
@@ -372,18 +430,15 @@ paths:
                   example: April 2026 Office Rent Invoice
                 documentType:
                   type: string
+                  nullable: true
                   enum: [income, expense]
-                  description: Type of document (either 'income' or 'expense')
+                  description: Optional document type ('income', 'expense', or null)
                   example: expense
                 documentDate:
                   type: string
                   format: date
                   description: Date of document (YYYY-MM-DD or ISO string)
                   example: "2026-04-15"
-                pdfCreated:
-                  type: boolean
-                  description: Whether a PDF is created
-                  example: false
       responses:
         '201':
           description: Document uploaded to OneDrive and recorded in DB successfully
@@ -393,6 +448,34 @@ paths:
                 $ref: '#/components/schemas/DocumentUploadResponse'
         '400':
           description: Validation error or missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /documents/counts:
+    get:
+      tags:
+        - Document Management
+      summary: Fetch Document Counts & Statistics for Authenticated User
+      description: |
+        Returns aggregate counts strictly for the authenticated user based on their Bearer token:
+        1. **total**: Total active documents uploaded by the user
+        2. **incomeInvoiceCount**: Total active income invoices for this user
+        3. **expenseInvoiceCount**: Total active expense invoices for this user
+        4. **pdfCount**: Total active documents with PDF created (PDF files)
+      operationId: getDocumentCounts
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Document counts fetched successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentCountsResponse'
+        '401':
+          description: Unauthorized - Invalid or missing token
           content:
             application/json:
               schema:
@@ -440,8 +523,9 @@ paths:
               properties:
                 documentType:
                   type: string
+                  nullable: true
                   enum: [income, expense]
-                  description: Filter by document type ('income' or 'expense')
+                  description: Filter by document type ('income', 'expense', or 'null' for unclassified)
                   example: expense
                 documentName:
                   type: string
@@ -457,9 +541,6 @@ paths:
                   format: date
                   description: End of documentDate range (YYYY-MM-DD)
                   example: "2026-12-31"
-                pdfCreated:
-                  type: boolean
-                  description: Filter by whether PDF is created
                   example: false
                 search:
                   type: string
@@ -527,35 +608,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /documents/bulk-delete:
-    post:
-      tags:
-        - Document Management
-      summary: Bulk Soft Delete Documents (POST Alias)
-      description: |
-        POST alias for bulk soft deleting multiple documents. Useful for HTTP clients, libraries, and proxies that restrict or omit request bodies in DELETE calls.
-      operationId: bulkSoftDeleteDocumentsPost
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/BulkDeleteRequest'
-      responses:
-        '200':
-          description: Bulk soft delete completed successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BulkDeleteResponse'
-        '400':
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
 
   /documents/{id}:
     get:
@@ -589,8 +641,8 @@ paths:
     delete:
       tags:
         - Document Management
-      summary: Soft Delete Document
-      description: Marks the document as soft-deleted in the database (`softDelete = true`).
+      summary: Delete Document & Remove from Microsoft OneDrive
+      description: Permanently removes the physical file from Microsoft OneDrive and marks the record as soft-deleted in the database (`softDelete = true`).
       operationId: softDeleteDocument
       parameters:
         - name: id
@@ -609,6 +661,73 @@ paths:
                 $ref: '#/components/schemas/DocumentSingleResponse'
         '404':
           description: Document not found or already deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /documents/{id}/content:
+    get:
+      tags:
+        - Document Management
+      summary: Stream Document / Image Content for PDF Generator and Viewers
+      description: |
+        Streams raw original binary file (images, PDFs) directly from Microsoft OneDrive to the client.
+        Designed specifically for mobile image rendering and PDF compiling libraries.
+        Accepts the Rover Ledger Bearer Token in 'Authorization: Bearer <token>' or query parameter '?token=<token>'.
+        Returns 'Content-Disposition: inline' and proper MIME 'Content-Type' (e.g. image/png, image/jpeg, application/pdf).
+      operationId: getDocumentContent
+      security:
+        - BearerAuth: []
+        - {}
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID of the document
+          schema:
+            type: string
+            format: uuid
+        - name: token
+          in: query
+          required: false
+          description: Optional Rover Ledger access token passed as query parameter
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Raw binary image/document stream
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          description: Unauthorized - Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Document not found or soft-deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Failed to retrieve file stream from Microsoft OneDrive
           content:
             application/json:
               schema:
@@ -663,6 +782,165 @@ paths:
 # ==========================================
 # COMPONENTS & SCHEMAS
 # ==========================================
+  # ==========================================
+  # GOOGLE DRIVE INTEGRATION ENDPOINTS
+  # ==========================================
+  /auth/google/connect:
+    get:
+      tags:
+        - Google Drive Integration
+      summary: Connect Company Google Drive (OAuth 2.0)
+      description: |
+        Initiates Google OAuth 2.0 authorization to link the company Google Drive account.
+        
+        **Parameters**:
+        - `redirect=false` (Optional): Returns JSON object with `authUrl` for mobile/SPA clients instead of 302 redirecting.
+        - `caEmail` (Optional): CA Gmail address to grant Viewer permission to the shared folder.
+      operationId: connectGoogleDrive
+      parameters:
+        - name: redirect
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['true', 'false']
+            default: 'true'
+          description: Whether to 302 redirect directly or return JSON
+        - name: caEmail
+          in: query
+          required: false
+          schema:
+            type: string
+            format: email
+          description: CA email to grant Viewer access to target folder
+      responses:
+        '200':
+          description: Authorization URL returned (when redirect=false)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      authUrl:
+                        type: string
+                        example: 'https://accounts.google.com/o/oauth2/v2/auth?...'
+        '302':
+          description: Redirects browser to Google OAuth consent screen
+
+  /auth/google/callback:
+    get:
+      tags:
+        - Google Drive Integration
+      summary: Google OAuth Callback
+      description: Receives the authorization code from Google, exchanges it for tokens, encrypts the refresh token at rest, and ensures the CA folder is created.
+      operationId: googleOAuthCallback
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Google authorization code
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successfully connected Google Drive
+        '400':
+          description: Invalid authorization code or missing refresh token
+
+  /auth/google/status:
+    get:
+      tags:
+        - Google Drive Integration
+      summary: Get Google Drive Connection Status
+      description: Checks whether company Google Drive is currently connected. Used by the Profile screen menu.
+      operationId: getGoogleDriveStatus
+      responses:
+        '200':
+          description: Current connection status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      isConnected:
+                        type: boolean
+                        example: true
+                      googleEmail:
+                        type: string
+                        example: 'company.drive@gmail.com'
+                      caEmail:
+                        type: string
+                        example: 'accountant@gmail.com'
+                      targetFolderId:
+                        type: string
+                        example: '1lY9...folderId'
+
+  /auth/google/disconnect:
+    post:
+      tags:
+        - Google Drive Integration
+      summary: Disconnect Google Drive
+      description: Disconnects the active Google Drive account and revokes active session tokens.
+      operationId: disconnectGoogleDrive
+      responses:
+        '200':
+          description: Disconnected successfully
+
+  /documents/{id}/share-to-ca:
+    post:
+      tags:
+        - Document Management
+        - Google Drive Integration
+      summary: Share Document with CA (Google Drive)
+      description: |
+        Shares a single invoice PDF directly with the CA's Google Drive.
+        
+        **Workflow**:
+        1. Validates user permission and document existence.
+        2. Retrieves the invoice file from Microsoft OneDrive.
+        3. Uploads the file into the company-owned Google Drive CA folder.
+        4. Grants viewer permission to the CA Gmail account.
+        5. Saves share audit record in the database.
+        
+        **Idempotent**: If already shared, returns existing share metadata without duplicate uploads.
+      operationId: shareDocumentToCa
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Document UUID to share
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Document was already shared with CA (idempotent response)
+        '201':
+          description: Document uploaded and shared with CA successfully
+        '400':
+          description: Company Google Drive not connected or invalid document ID
+        '404':
+          description: Document not found
+
 components:
   securitySchemes:
     bearerAuth:
@@ -830,8 +1108,9 @@ components:
           example: April 2026 Office Rent Invoice
         documentType:
           type: string
+          nullable: true
           enum: [income, expense]
-          description: Document type
+          description: Document type ('income', 'expense', or null)
           example: expense
         fileSize:
           type: integer
@@ -846,10 +1125,6 @@ components:
           format: date-time
           description: Date of document
           example: "2026-04-15T00:00:00.000Z"
-        pdfCreated:
-          type: boolean
-          description: Flag indicating whether PDF is created
-          example: false
         softDelete:
           type: boolean
           description: Soft delete status
@@ -884,6 +1159,23 @@ components:
           format: uuid
           nullable: true
           description: User ID who uploaded the file
+        isSharedWithCa:
+          type: boolean
+          description: Whether document is shared with CA in Google Drive
+          example: false
+        sharedWithCaAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp when document was shared with CA
+        googleDriveFileId:
+          type: string
+          nullable: true
+          description: Google Drive file ID
+        googleDriveViewUrl:
+          type: string
+          nullable: true
+          description: Google Drive web view URL
 
     # Document Upload Response
     DocumentUploadResponse:
@@ -911,6 +1203,32 @@ components:
         data:
           $ref: '#/components/schemas/DocumentDetails'
 
+    # Document Counts Response
+    DocumentCountsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Document counts fetched successfully
+        data:
+          type: object
+          properties:
+            total:
+              type: integer
+              example: 42
+            incomeInvoiceCount:
+              type: integer
+              example: 24
+            expenseInvoiceCount:
+              type: integer
+              example: 18
+            pdfCount:
+              type: integer
+              example: 15
+
     # Document List Response (Paginated)
     DocumentListResponse:
       type: object
@@ -928,9 +1246,6 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/DocumentDetails'
-            total:
-              type: integer
-              example: 42
             page:
               type: integer
               example: 1
@@ -940,12 +1255,6 @@ components:
             totalPages:
               type: integer
               example: 1
-            incomeInvoiceCount:
-              type: integer
-              example: 24
-            expenseInvoiceCount:
-              type: integer
-              example: 18
 
     # Bulk Delete Request
     BulkDeleteRequest:

@@ -116,6 +116,22 @@ class UserRepository {
 
     return result[0] || null;
   }
+
+  /**
+   * Permanently delete a user record by primary key (UserId)
+   * @param {string} userId - User ID to delete
+   * @param {object|null} tx - Optional transaction handle
+   * @returns {Promise<object|null>} Deleted user record or null if not found
+   */
+  async deleteById(userId, tx = null) {
+    if (!userId) return null;
+    const executor = tx || db;
+    const result = await executor
+      .delete(RoverLedgers)
+      .where(eq(RoverLedgers.UserId, userId))
+      .returning();
+    return result[0] || null;
+  }
 }
 
 module.exports = new UserRepository();
