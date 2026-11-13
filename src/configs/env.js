@@ -40,7 +40,7 @@ const env = {
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || process.env.googleClientSecret,
   googleRedirectUri: process.env.GOOGLE_REDIRECT_URI || process.env.GoogleRedirectURIs || 'http://localhost:3003/auth/google/callback',
   googleServiceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env['Google service account email'],
-  caEmailDefault: process.env.CA_EMAIL_DEFAULT || 'bapodaradharmik10@gmail.com',
+  caEmailDefault: process.env.CA_EMAIL_DEFAULT || 'shraddhac734@gmail.com',
   googleTokenEncryptionKey: process.env.GOOGLE_TOKEN_ENCRYPTION_KEY || 'rover_ledger_google_token_key_32',
 };
 

@@ -215,7 +215,7 @@ class GoogleDriveService {
     }
 
     // 2. Create the target folder in Google Drive
-    const folderName = 'Rover Ledger - CA Invoices';
+    const folderName = 'Rover Ledger Invoices';
     try {
       const createRes = await axios.post(
         'https://www.googleapis.com/drive/v3/files',

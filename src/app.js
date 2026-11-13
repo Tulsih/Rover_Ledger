@@ -9,6 +9,7 @@ const YAML = require('yamljs');
 const { testConnection } = require('./db');
 const routes = require('./routes');
 const { errorHandler, notFoundHandler } = require('./middlewares/error.middleware');
+const logger = require('./utils/logger.util');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -29,10 +30,10 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Request logger for development
+// Request logger for development & production (silent in test)
 if (process.env.NODE_ENV !== 'test') {
   app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    logger.info(`${req.method} ${req.url}`);
     next();
   });
 }
@@ -96,30 +97,7 @@ const rootHandler = (req, res) => {
     project: 'Rover Ledger API',
     status: 'Running',
     version: '1.0.0',
-    documentation: {
-      swaggerUI: '/docs (or /swagger-ui, /rover-ledger/docs)',
-      loginWithMicrosoft: 'POST /auth/microsoft',
-      getLoginUrl: 'GET /auth/microsoft',
-      oauthCallback: 'GET /auth/microsoft/callback',
-      connectGoogleDrive: 'GET /auth/google/connect (Redirects to Google OAuth consent page, or ?redirect=false for JSON URL)',
-      googleCallback: 'GET /auth/google/callback (Google OAuth redirect URI, saves encrypted refresh token)',
-      googleStatus: 'GET /auth/google/status (Checks whether Google Drive is connected for Profile screen)',
-      googleDisconnect: 'POST /auth/google/disconnect (Disconnects Google Drive)',
-      profileFetch: 'GET /users/profile (Headers: Authorization: Bearer <token>)',
-      profileUpdate: 'PUT /users/profile (Headers: Authorization: Bearer <token>)',
-      profileDelete: 'DELETE /users/profile (Headers: Authorization: Bearer <token> - Cascading deletion of user, OneDrive files, and all DB data)',
-      logout: 'POST /auth/logout (Headers: Authorization: Bearer <token>)',
-      uploadDocument: 'POST /documents/upload (multipart/form-data: file, documentName, documentType, documentDate)',
-      fetchAllDocuments: 'GET /documents (Headers: Authorization: Bearer <token> - Includes isSharedWithCa & sharedWithCaAt)',
-      documentCounts: 'GET /documents/counts (Headers: Authorization: Bearer <token> - Returns total, income, expense, and pdf counts)',
-      filterDocuments: 'POST /documents/filter (Body: documentType, documentName, startDate, endDate)',
-      getDocumentById: 'GET /documents/:id (Includes isSharedWithCa, sharedWithCaAt, and Google Drive links)',
-      getDocumentContent: 'GET /documents/:id/content (Streams raw binary image/file for PDF generator & image viewers)',
-      downloadDocument: 'GET /documents/:id/download (Attachment download from OneDrive)',
-      shareDocumentToCa: 'POST /documents/:id/share-to-ca (Uploads document from OneDrive to Google Drive CA folder)',
-      deleteDocument: 'DELETE /documents/:id (Soft delete in DB & permanently removes file from Microsoft OneDrive)',
-      bulkDeleteDocuments: 'DELETE /documents/bulk (Soft delete multiple documents in DB & permanently removes files from Microsoft OneDrive)',
-    },
+    documentation: '/docs',
   });
 };
 
@@ -150,7 +128,7 @@ app.use(errorHandler);
 // ==========================================
 if (require.main === module) {
   app.listen(PORT, async () => {
-    console.log(`🚀 Rover Ledger Server running on http://localhost:${PORT}`);
+    logger.info(`🚀 Rover Ledger Server running on http://localhost:${PORT}`);
     // Check PostgreSQL connection on startup
     await testConnection();
   });

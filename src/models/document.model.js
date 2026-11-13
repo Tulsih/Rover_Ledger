@@ -1,15 +1,15 @@
-const { pgTable, uuid, varchar, boolean, timestamp, text, bigint } = require('drizzle-orm/pg-core');
+const { pgTable, uuid, varchar, boolean, timestamp, text, bigint, index } = require('drizzle-orm/pg-core');
 
 /**
  * DocumentDetails Table Schema
- * Stores metadata of all documents and images uploaded to Rover Ledger and synced to Microsoft OneDrive
+ * Stores metadata of all documents and invoices uploaded to Rover Ledger and synced to Microsoft OneDrive
  */
 const DocumentDetails = pgTable('document_details', {
   id: uuid('id').defaultRandom().primaryKey(),
   documentName: varchar('documentName', { length: 255 }).notNull(),
   documentType: varchar('documentType', { length: 50 }), // optional: 'income', 'expense', or null
   fileSize: bigint('fileSize', { mode: 'number' }).notNull(), // size in bytes
-  fileType: varchar('fileType', { length: 100 }).notNull(), // MIME type (e.g. image/jpeg, application/pdf)
+  fileType: varchar('fileType', { length: 100 }).notNull(), // MIME type (application/pdf)
   documentDate: timestamp('documentDate').notNull(), // Date of document entered by user
   softDelete: boolean('softDelete').default(false).notNull(), // soft delete flag
   createdAt: timestamp('createdAt').defaultNow().notNull(),
@@ -21,9 +21,14 @@ const DocumentDetails = pgTable('document_details', {
   oneDriveDownloadUrl: text('oneDriveDownloadUrl'),
   originalFileName: varchar('originalFileName', { length: 255 }).notNull(),
 
-  // Optional user association (if uploaded in authenticated session)
+  // User association (authenticated user who uploaded)
   uploadedBy: uuid('uploadedBy'),
-});
+}, (table) => [
+  index('idx_document_details_uploaded_by').on(table.uploadedBy),
+  index('idx_document_details_soft_delete_uploaded_by').on(table.softDelete, table.uploadedBy),
+  index('idx_document_details_soft_delete_created_at').on(table.softDelete, table.createdAt),
+  index('idx_document_details_document_date').on(table.documentDate),
+]);
 
 module.exports = {
   DocumentDetails,

@@ -1,4 +1,5 @@
 const { pgTable, uuid, varchar, boolean, timestamp } = require('drizzle-orm/pg-core');
+const { Role } = require('../enums');
 
 const RoverLedgers = pgTable('Rover_ledgers', {
   UserId: uuid('UserId').defaultRandom().primaryKey(),
@@ -6,7 +7,7 @@ const RoverLedgers = pgTable('Rover_ledgers', {
   LastName: varchar('LastName', { length: 255 }),
   Email: varchar('Email', { length: 255 }).notNull().unique(),
   Gender: varchar('Gender', { length: 50 }),
-  Role: varchar('Role', { length: 100 }).default('User').notNull(),
+  Role: varchar('Role', { length: 100 }).default(Role.USER).notNull(),
   CreatedAt: timestamp('CreatedAt').defaultNow().notNull(),
   UpdatedAt: timestamp('UpdatedAt').defaultNow().notNull(),
   Designation: varchar('Designation', { length: 255 }),

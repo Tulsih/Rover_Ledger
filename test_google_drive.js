@@ -4,7 +4,12 @@ const cryptoUtil = require('./src/utils/crypto.util');
 const googleConfigRepository = require('./src/repositories/googleConfig.repository');
 const documentCaShareRepository = require('./src/repositories/documentCaShare.repository');
 const documentRepository = require('./src/repositories/document.repository');
-const { pool, testConnection } = require('./src/db');
+const userRepository = require('./src/repositories/user.repository');
+const { Role } = require('./src/enums');
+const { generateAccessToken } = require('./src/utils/jwt.util');
+const { RoverLedgers } = require('./src/models');
+const { inArray } = require('drizzle-orm');
+const { pool, testConnection, db } = require('./src/db');
 
 async function runGoogleDriveTests() {
   console.log('🧪 Starting Rover Ledger Google Drive Integration Test Suite...\n');
@@ -44,7 +49,31 @@ async function runGoogleDriveTests() {
     });
   };
 
+  const createdUserIds = [];
+
   try {
+    // Seed test Admin and User for role verification
+    const testAdmin = await userRepository.createUser({
+      FirstName: 'DriveAdmin',
+      LastName: 'Tester',
+      Email: `driveadmin.${Date.now()}@roverledger.com`,
+      Role: Role.ADMIN,
+      isActive: true,
+    });
+    createdUserIds.push(testAdmin.UserId);
+
+    const testUser = await userRepository.createUser({
+      FirstName: 'DriveUser',
+      LastName: 'Tester',
+      Email: `driveuser.${Date.now()}@roverledger.com`,
+      Role: Role.USER,
+      isActive: true,
+    });
+    createdUserIds.push(testUser.UserId);
+
+    const adminToken = generateAccessToken({ UserId: testAdmin.UserId, Email: testAdmin.Email, Role: testAdmin.Role });
+    const userToken = generateAccessToken({ UserId: testUser.UserId, Email: testUser.Email, Role: testUser.Role });
+
     // 1. Test Crypto Util (AES-256-GCM encryption & decryption)
     console.log('1️⃣ Testing AES-256-GCM Token Encryption & Decryption...');
     const sampleToken = '1//0gA1b2c3d4e5f6g7h8i9j0k_sample_refresh_token_xyz';
@@ -57,19 +86,28 @@ async function runGoogleDriveTests() {
     console.log('   Decrypted text matches exactly:', decrypted === sampleToken);
     console.log('   ✅ Crypto Util test passed.\n');
 
-    // 2. Test GET /auth/google/connect?redirect=false
-    console.log('2️⃣ Testing Google OAuth Connect URL Generation (GET /auth/google/connect?redirect=false)...');
-    const connectRes = await makeRequest('/auth/google/connect?redirect=false');
-    console.log('   Connect response status:', connectRes.status);
-    console.log('   Generated authUrl:', connectRes.data?.data?.authUrl);
-    if (connectRes.status !== 200 || !connectRes.data?.data?.authUrl) {
-      throw new Error('Failed to generate Google OAuth connect URL');
+    // 2. Test GET /auth/google/connect role restrictions
+    console.log('2️⃣ Testing Google OAuth Connect Access Control (Admin Only)...');
+    // 2a. Unauthenticated -> 401
+    const unauthRes = await makeRequest('/auth/google/connect?redirect=false');
+    if (unauthRes.status !== 401) throw new Error(`Expected 401 for unauthenticated connect, got ${unauthRes.status}`);
+    console.log('   ✅ Unauthenticated request correctly rejected with 401');
+
+    // 2b. Role: User -> 403 Forbidden
+    const userForbiddenRes = await makeRequest('/auth/google/connect?redirect=false', 'GET', null, userToken);
+    if (userForbiddenRes.status !== 403) throw new Error(`Expected 403 for User role connect, got ${userForbiddenRes.status}`);
+    console.log('   ✅ Regular User request correctly rejected with 403 Forbidden');
+
+    // 2c. Role: Admin -> 200 OK + authUrl
+    const adminConnectRes = await makeRequest('/auth/google/connect?redirect=false', 'GET', null, adminToken);
+    if (adminConnectRes.status !== 200 || !adminConnectRes.data?.data?.authUrl) {
+      throw new Error('Failed to generate Google OAuth connect URL for Admin');
     }
-    const authUrl = connectRes.data.data.authUrl;
+    const authUrl = adminConnectRes.data.data.authUrl;
     if (!authUrl.includes('accounts.google.com') || !authUrl.includes('drive.file') || !authUrl.includes('access_type=offline')) {
       throw new Error('Google OAuth URL is missing mandatory parameters');
     }
-    console.log('   ✅ Google Connect URL generation passed.\n');
+    console.log('   ✅ Admin role successfully authorized (200 OK with authUrl).\n');
 
     // 3. Test GET /auth/google/status
     console.log('3️⃣ Testing Google Drive Connection Status (GET /auth/google/status)...');
@@ -96,7 +134,14 @@ async function runGoogleDriveTests() {
       originalFileName: 'test_unconnected.pdf',
     });
 
-    const shareFailRes = await makeRequest(`/documents/${tempDoc.id}/share-to-ca`, 'POST');
+    // Unauthenticated request must return 401
+    const unauthShareRes = await makeRequest(`/documents/${tempDoc.id}/share-to-ca`, 'POST');
+    if (unauthShareRes.status !== 401) {
+      throw new Error(`Expected 401 Unauthorized for unauthenticated share-to-ca, got ${unauthShareRes.status}`);
+    }
+    console.log('   ✅ Unauthenticated share-to-ca request correctly rejected with 401');
+
+    const shareFailRes = await makeRequest(`/documents/${tempDoc.id}/share-to-ca`, 'POST', null, userToken);
     console.log('   Share response status (expected 400):', shareFailRes.status);
     console.log('   Error message:', shareFailRes.data?.message);
     if (shareFailRes.status !== 400 || !shareFailRes.data?.message?.includes('Google Drive is not connected')) {
@@ -116,8 +161,8 @@ async function runGoogleDriveTests() {
     }
     console.log('   ✅ Document Details correctly enriched with Google Drive CA share properties.\n');
 
-    // 6. Test Idempotency with existing share record
-    console.log('6️⃣ Testing Share with CA Idempotency...');
+    // 6. Test Idempotency with existing share record & Database Unique Constraint
+    console.log('6️⃣ Testing Share with CA Idempotency & Database Unique Constraint...');
     // Manually record a share in DocumentCaShares
     const mockShare = await documentCaShareRepository.createShare({
       documentId: tempDoc.id,
@@ -128,8 +173,23 @@ async function runGoogleDriveTests() {
     });
     console.log('   Seeded mock share record:', mockShare);
 
-    // Now call POST /documents/:id/share-to-ca
-    const idempotentShareRes = await makeRequest(`/documents/${tempDoc.id}/share-to-ca`, 'POST');
+    // Verify DB unique constraint rejects duplicate insert on documentId
+    try {
+      await documentCaShareRepository.createShare({
+        documentId: tempDoc.id,
+        googleDriveFileId: '2mockGoogleFileId999999999',
+        googleDriveWebViewLink: 'https://drive.google.com/file/d/2mock/view',
+        caEmail: 'ca.auditor@test.com',
+        sharedByUserId: null,
+      });
+      throw new Error('Expected duplicate createShare to fail due to DB unique constraint');
+    } catch (dbErr) {
+      if (dbErr.message.includes('Expected duplicate createShare to fail')) throw dbErr;
+      console.log('   ✅ Database unique constraint correctly prevented duplicate share record insert:', dbErr.message);
+    }
+
+    // Now call POST /documents/:id/share-to-ca with userToken
+    const idempotentShareRes = await makeRequest(`/documents/${tempDoc.id}/share-to-ca`, 'POST', null, userToken);
     console.log('   Idempotent share status:', idempotentShareRes.status);
     console.log('   Idempotent message:', idempotentShareRes.data?.message);
     console.log('   Already shared flag:', idempotentShareRes.data?.data?.alreadyShared);
@@ -149,18 +209,50 @@ async function runGoogleDriveTests() {
     }
     console.log('   ✅ Idempotency and document enrichment verified.\n');
 
-    // 7. Test Disconnect endpoint
-    console.log('7️⃣ Testing POST /auth/google/disconnect...');
-    const disconnectRes = await makeRequest('/auth/google/disconnect', 'POST');
-    console.log('   Disconnect response:', disconnectRes.data);
-    if (disconnectRes.status !== 200) {
-      throw new Error('Failed to disconnect Google Drive');
+    // 6b. Test Filter by isSharedWithCa (POST /documents/filter)
+    console.log('6️⃣b Testing Filter by isSharedWithCa: true and false...');
+    const filterSharedRes = await makeRequest('/documents/filter', 'POST', {
+      isSharedWithCa: true,
+    });
+    console.log('   Filter isSharedWithCa: true returned rows count:', filterSharedRes.data?.data?.rows?.length);
+    const foundInShared = filterSharedRes.data?.data?.rows?.some(r => r.id === tempDoc.id);
+    if (!foundInShared) {
+      throw new Error('Expected tempDoc to be included in isSharedWithCa: true filter results');
+    }
+
+    const filterUnsharedRes = await makeRequest('/documents/filter', 'POST', {
+      isSharedWithCa: false,
+    });
+    console.log('   Filter isSharedWithCa: false returned rows count:', filterUnsharedRes.data?.data?.rows?.length);
+    const foundInUnshared = filterUnsharedRes.data?.data?.rows?.some(r => r.id === tempDoc.id);
+    if (foundInUnshared) {
+      throw new Error('Expected tempDoc to NOT be included in isSharedWithCa: false filter results');
+    }
+    console.log('   ✅ Filter by isSharedWithCa (true/false) verified successfully.\n');
+
+    // 7. Test Disconnect endpoint access control
+    console.log('7️⃣ Testing POST /auth/google/disconnect Access Control (Admin Only)...');
+    // 7a. Unauthenticated -> 401
+    const unauthDiscRes = await makeRequest('/auth/google/disconnect', 'POST');
+    if (unauthDiscRes.status !== 401) throw new Error(`Expected 401 for unauthenticated disconnect, got ${unauthDiscRes.status}`);
+    console.log('   ✅ Unauthenticated request correctly rejected with 401');
+
+    // 7b. Role: User -> 403 Forbidden
+    const userDiscRes = await makeRequest('/auth/google/disconnect', 'POST', null, userToken);
+    if (userDiscRes.status !== 403) throw new Error(`Expected 403 for User role disconnect, got ${userDiscRes.status}`);
+    console.log('   ✅ Regular User disconnect correctly rejected with 403 Forbidden');
+
+    // 7c. Role: Admin -> 200 OK
+    const adminDiscRes = await makeRequest('/auth/google/disconnect', 'POST', null, adminToken);
+    console.log('   Disconnect response:', adminDiscRes.data);
+    if (adminDiscRes.status !== 200) {
+      throw new Error('Failed to disconnect Google Drive for Admin');
     }
     const finalStatus = await makeRequest('/auth/google/status');
     if (finalStatus.data?.data?.isConnected !== false) {
       throw new Error('Expected isConnected to be false after disconnect');
     }
-    console.log('   ✅ Google Drive disconnect endpoint verified.\n');
+    console.log('   ✅ Google Drive disconnect endpoint verified with Admin role.\n');
 
     // Clean up temporary test document from DB
     await documentRepository.softDelete(tempDoc.id);
@@ -170,6 +262,9 @@ async function runGoogleDriveTests() {
     console.error('❌ Google Drive test failed:', err);
     process.exit(1);
   } finally {
+    if (createdUserIds.length > 0) {
+      await db.delete(RoverLedgers).where(inArray(RoverLedgers.UserId, createdUserIds));
+    }
     server.close();
     await pool.end();
   }

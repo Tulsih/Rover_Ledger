@@ -9,10 +9,10 @@ const { authenticateToken, optionalAuth } = require('../middlewares/auth.middlew
  * Base mount point: /documents
  */
 
-// 1. Upload document / image to Microsoft OneDrive and save details to DB
+// 1. Upload document (PDF only) to Microsoft OneDrive and save details to DB (Authenticated users only)
 router.post(
   '/upload',
-  optionalAuth,
+  authenticateToken,
   uploadDocumentFile,
   documentController.uploadDocument.bind(documentController)
 );
@@ -38,7 +38,7 @@ router.get(
   documentController.getAllDocuments.bind(documentController)
 );
 
-// 5. Stream raw document / image content directly for PDF generator & image renderers (inline)
+// 5. Stream raw document content directly for PDF generator & image renderers (inline)
 router.get(
   '/:id/content',
   optionalAuth,
@@ -52,10 +52,10 @@ router.get(
   documentController.downloadDocument.bind(documentController)
 );
 
-// 7. Bulk soft delete documents (mounted before /:id to prevent route shadowing)
+// 7. Bulk soft delete documents (Authenticated users only - mounted before /:id to prevent route shadowing)
 router.delete(
   '/bulk',
-  optionalAuth,
+  authenticateToken,
   documentController.bulkSoftDeleteDocuments.bind(documentController)
 );
 
@@ -66,17 +66,17 @@ router.get(
   documentController.getDocumentById.bind(documentController)
 );
 
-// 9. Soft delete single document by ID (supports authtoken check)
+// 9. Soft delete single document by ID (Authenticated users only)
 router.delete(
   '/:id',
-  optionalAuth,
+  authenticateToken,
   documentController.softDeleteDocument.bind(documentController)
 );
 
-// 10. Share single document with CA via Google Drive
+// 10. Share single document with CA via Google Drive (Authenticated users only)
 router.post(
   '/:id/share-to-ca',
-  optionalAuth,
+  authenticateToken,
   documentController.shareToCa.bind(documentController)
 );
 

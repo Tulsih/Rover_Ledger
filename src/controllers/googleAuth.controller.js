@@ -20,6 +20,8 @@ class GoogleAuthController {
       const caEmail = req.query?.caEmail || env.caEmailDefault;
       const stateObj = {
         caEmail,
+        adminUserId: req.user?.UserId || null,
+        adminEmail: req.user?.Email || null,
         timestamp: Date.now(),
       };
 

@@ -1,4 +1,4 @@
-const { pgTable, uuid, varchar, text, timestamp } = require('drizzle-orm/pg-core');
+const { pgTable, uuid, varchar, text, timestamp, uniqueIndex } = require('drizzle-orm/pg-core');
 const { DocumentDetails } = require('./document.model');
 
 /**
@@ -16,7 +16,9 @@ const DocumentCaShares = pgTable('document_ca_shares', {
   caEmail: varchar('caEmail', { length: 255 }).notNull(),
   sharedByUserId: uuid('sharedByUserId'),
   sharedAt: timestamp('sharedAt').defaultNow().notNull(),
-});
+}, (table) => [
+  uniqueIndex('idx_document_ca_shares_unique_doc').on(table.documentId),
+]);
 
 module.exports = {
   DocumentCaShares,

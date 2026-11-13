@@ -16,6 +16,7 @@ const {
 } = require('../utils/microsoft.util');
 const { env } = require('../configs/env');
 const { isMockAuthCode, getMockUserProfile } = require('../utils/mockAuth.util');
+const { Role } = require('../enums');
 
 /**
  * Authentication Service
@@ -24,6 +25,19 @@ const { isMockAuthCode, getMockUserProfile } = require('../utils/mockAuth.util')
  * Access & Refresh token issuance, token rotation, and logout.
  */
 class AuthService {
+  /**
+   * Helper to format standardized authentication response with tokens and user profile
+   */
+  _formatAuthResponse(user, accessToken, refreshToken) {
+    return {
+      accessToken,
+      refreshToken,
+      tokenType: 'Bearer',
+      expiresIn: parseExpiresInSeconds(JWT_ACCESS_EXPIRES_IN),
+      user: userRepository.sanitizeUser(user),
+    };
+  }
+
   /**
    * Get the Microsoft OAuth 2.0 Login URL
    * @param {string} state - State string for CSRF mitigation
@@ -109,7 +123,7 @@ class AuthService {
         FullName: msProfile.fullName || null,
         Designation: msProfile.designation || null,
         Gender: msProfile.gender || null,
-        Role: 'User',
+        Role: Role.USER,
         isActive: true,
         SoftDelete: false,
       });
@@ -138,25 +152,7 @@ class AuthService {
       expiresAt: refreshExpiresAt,
     });
 
-    return {
-      accessToken: appAccessToken,
-      refreshToken: appRefreshToken,
-      tokenType: 'Bearer',
-      expiresIn: parseExpiresInSeconds(JWT_ACCESS_EXPIRES_IN),
-      user: {
-        UserId: user.UserId,
-        FirstName: user.FirstName,
-        LastName: user.LastName,
-        FullName: user.FullName,
-        Email: user.Email,
-        Gender: user.Gender,
-        Role: user.Role,
-        Designation: user.Designation,
-        isActive: user.isActive,
-        CreatedAt: user.CreatedAt,
-        UpdatedAt: user.UpdatedAt,
-      },
-    };
+    return this._formatAuthResponse(user, appAccessToken, appRefreshToken);
   }
 
   /**
@@ -257,25 +253,7 @@ class AuthService {
       expiresAt: newExpiresAt,
     });
 
-    return {
-      accessToken: newAccessToken,
-      refreshToken: newRefreshToken,
-      tokenType: 'Bearer',
-      expiresIn: parseExpiresInSeconds(JWT_ACCESS_EXPIRES_IN),
-      user: {
-        UserId: user.UserId,
-        FirstName: user.FirstName,
-        LastName: user.LastName,
-        FullName: user.FullName,
-        Email: user.Email,
-        Gender: user.Gender,
-        Role: user.Role,
-        Designation: user.Designation,
-        isActive: user.isActive,
-        CreatedAt: user.CreatedAt,
-        UpdatedAt: user.UpdatedAt,
-      },
-    };
+    return this._formatAuthResponse(user, newAccessToken, newRefreshToken);
   }
 
   /**

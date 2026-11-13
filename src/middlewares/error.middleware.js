@@ -1,4 +1,5 @@
 const { sendError } = require('../utils/response.util');
+const logger = require('../utils/logger.util');
 
 /**
  * Global Error Handling Middleware
@@ -7,7 +8,7 @@ const { sendError } = require('../utils/response.util');
  * and returns a standard JSON error response instead of crashing.
  */
 const errorHandler = (err, req, res, next) => {
-  console.error('[Unhandled Error]:', err);
+  logger.error({ err }, '[Unhandled Error]: ' + err.message);
 
   const statusCode = err.statusCode || 500;
   const message = err.message || 'Internal Server Error';

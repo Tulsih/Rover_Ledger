@@ -45,6 +45,12 @@ async function runDocumentTests() {
   const baseUrl = 'http://localhost:5006';
 
   const uploadedOneDriveItemIds = [];
+  const testUserId = '00000000-1111-2222-3333-444444444444';
+  const testUserToken = generateToken({
+    UserId: testUserId,
+    Email: 'auth_user_docs@roverledger.com',
+    Role: 'User',
+  });
 
   const makeJsonRequest = (path, method = 'GET', body = null, token = null) => {
     return new Promise((resolve, reject) => {
@@ -120,13 +126,25 @@ async function runDocumentTests() {
   };
 
   try {
+    // 0. Validation Testing: Upload without authtoken (must be rejected 401)
+    console.log('0️⃣ Testing Upload Validation (Unauthenticated upload requires token)...');
+    const unauthUploadRes = await makeMultipartRequest('/documents/upload', {
+      documentName: 'Unauth Document',
+      documentType: 'income',
+      documentDate: '2026-04-01',
+    }, null, null);
+    if (unauthUploadRes.status !== 401) {
+      throw new Error(`Expected 401 Unauthorized when uploading without token, got ${unauthUploadRes.status}`);
+    }
+    console.log('   ✅ Correctly rejected unauthenticated upload request with 401 Unauthorized.\n');
+
     // 1. Validation Testing: Missing File
     console.log('1️⃣ Testing Upload Validation (Missing file)...');
     const noFileRes = await makeMultipartRequest('/documents/upload', {
       documentName: 'Test Document',
       documentType: 'income',
       documentDate: '2026-04-01',
-    }, null);
+    }, null, testUserToken);
     console.log('   Missing file response:', noFileRes.data);
     if (noFileRes.status !== 400 || noFileRes.data.success !== false) {
       throw new Error('Expected 400 validation error for missing file');
@@ -144,7 +162,7 @@ async function runDocumentTests() {
       filename: 'receipt.png',
       mimetype: 'image/png',
       content: Buffer.from('dummy image content'),
-    });
+    }, testUserToken);
     console.log('   Invalid type response:', invalidTypeRes.data);
     if (invalidTypeRes.status !== 400 || !invalidTypeRes.data.message.includes('Allowed values are')) {
       throw new Error('Expected 400 validation error for invalid documentType');
@@ -153,17 +171,17 @@ async function runDocumentTests() {
 
     // 2.1 Testing Upload Document without documentType (optional field test)
     console.log('2️⃣.1️⃣ Testing Upload Document without documentType (documentType is optional)...');
-    const docNoTypeContent = Buffer.from('GENERAL MEMO: Rover Ledger Quarterly Planning');
+    const docNoTypeContent = Buffer.from('%PDF-1.4 GENERAL MEMO: Rover Ledger Quarterly Planning');
     const uploadResNoType = await makeMultipartRequest('/documents/upload', {
       documentName: 'Quarterly Planning Memo',
       documentDate: '2026-06-01',
       // Notice: documentType is completely omitted here
     }, {
       fieldname: 'file',
-      filename: 'planning_memo.txt',
-      mimetype: 'text/plain',
+      filename: 'planning_memo.pdf',
+      mimetype: 'application/pdf',
       content: docNoTypeContent,
-    });
+    }, testUserToken);
 
     console.log('   Upload (without documentType) Response:', uploadResNoType.data);
     if (uploadResNoType.status !== 201 || !uploadResNoType.data.success) {
@@ -179,17 +197,17 @@ async function runDocumentTests() {
 
     // 2.2 Testing Upload Document with documentType: 'null' (explicit null value)
     console.log('2️⃣.2️⃣ Testing Upload Document with documentType: "null"...');
-    const docNullTypeContent = Buffer.from('GENERAL MEMO: Rover Ledger Explicit Null Document Type');
+    const docNullTypeContent = Buffer.from('%PDF-1.4 GENERAL MEMO: Rover Ledger Explicit Null Document Type');
     const uploadResNullType = await makeMultipartRequest('/documents/upload', {
       documentName: 'Explicit Null Type Document',
       documentType: 'null',
       documentDate: '2026-06-02',
     }, {
       fieldname: 'file',
-      filename: 'null_type_memo.txt',
-      mimetype: 'text/plain',
+      filename: 'null_type_memo.pdf',
+      mimetype: 'application/pdf',
       content: docNullTypeContent,
-    });
+    }, testUserToken);
 
     console.log('   Upload (with documentType: "null") Response:', uploadResNullType.data);
     if (uploadResNullType.status !== 201 || !uploadResNullType.data.success) {
@@ -205,17 +223,17 @@ async function runDocumentTests() {
 
     // 2.3 Testing Upload Document with documentType: 'undefined' (common FormData stringification from FE)
     console.log('2️⃣.3️⃣ Testing Upload Document with documentType: "undefined"...');
-    const docUndefinedTypeContent = Buffer.from('GENERAL MEMO: Rover Ledger FormData undefined string test');
+    const docUndefinedTypeContent = Buffer.from('%PDF-1.4 GENERAL MEMO: Rover Ledger FormData undefined string test');
     const uploadResUndefinedType = await makeMultipartRequest('/documents/upload', {
       documentName: 'Undefined Type String Document',
       documentType: 'undefined',
       documentDate: '2026-06-03',
     }, {
       fieldname: 'file',
-      filename: 'undefined_type_memo.txt',
-      mimetype: 'text/plain',
+      filename: 'undefined_type_memo.pdf',
+      mimetype: 'application/pdf',
       content: docUndefinedTypeContent,
-    });
+    }, testUserToken);
 
     console.log('   Upload (with documentType: "undefined") Response:', uploadResUndefinedType.data);
     if (uploadResUndefinedType.status !== 201 || !uploadResUndefinedType.data.success) {
@@ -229,9 +247,9 @@ async function runDocumentTests() {
     }
     console.log('   ✅ Document uploaded successfully with documentType: "undefined" (safely handled and stored as null)!\n');
 
-    // 3. Upload Document 1: Income Document (without token)
+    // 3. Upload Document 1: Income Document
     console.log('3️⃣ Testing Upload Document 1 (documentType: income, synced to Microsoft OneDrive)...');
-    const doc1Content = Buffer.from('INVOICE #1001: Rover Ledger Consulting Services - Paid $5,000');
+    const doc1Content = Buffer.from('%PDF-1.4 INVOICE #1001: Rover Ledger Consulting Services - Paid $5,000');
     const uploadRes1 = await makeMultipartRequest('/documents/upload', {
       documentName: 'Consulting Income Invoice April 2026',
       documentType: 'income',
@@ -241,7 +259,7 @@ async function runDocumentTests() {
       filename: 'consulting_income.pdf',
       mimetype: 'application/pdf',
       content: doc1Content,
-    });
+    }, testUserToken);
 
     console.log('   Upload 1 Response:', uploadRes1.data);
     if (uploadRes1.status !== 201 || !uploadRes1.data.success) {
@@ -268,7 +286,7 @@ async function runDocumentTests() {
     if (doc1.softDelete !== false) throw new Error(`Expected softDelete false, got ${doc1.softDelete}`);
     console.log('   ✅ Document 1 successfully stored in Rover Ledger DB and synced to Microsoft OneDrive!\n');
 
-    // 4. Upload Document 2: expense Document (testing 'expense' type)
+    // 4. Upload Document 2: expense Document (testing 'expense' type and image upload)
     console.log('4️⃣ Testing Upload Document 2 (documentType: expense, image upload)...');
     const doc2Content = Buffer.from('RECEIPT: Office Supplies & Equipment - $450');
     const uploadRes2 = await makeMultipartRequest('/documents/upload', {
@@ -280,7 +298,7 @@ async function runDocumentTests() {
       filename: 'office_receipt.jpg',
       mimetype: 'image/jpeg',
       content: doc2Content,
-    });
+    }, testUserToken);
 
     console.log('   Upload 2 Response:', uploadRes2.data);
     if (uploadRes2.status !== 201 || !uploadRes2.data.success) {
@@ -296,12 +314,6 @@ async function runDocumentTests() {
 
     // 5. Upload Document 3: Associated with an Authenticated User via authtoken
     console.log('5️⃣ Testing Upload Document 3 with authtoken...');
-    const testUserId = '00000000-1111-2222-3333-444444444444';
-    const testUserToken = generateToken({
-      UserId: testUserId,
-      Email: 'auth_user_docs@roverledger.com',
-      Role: 'User',
-    });
 
     const doc3Content = Buffer.from('BILL: Software Licenses expense - $1,200');
     const uploadRes3 = await makeMultipartRequest('/documents/upload', {
@@ -462,7 +474,15 @@ async function runDocumentTests() {
 
     // 12. Soft Delete Document
     console.log('1️⃣2️⃣ Testing Soft Delete Document (DELETE /documents/:id)...');
-    const deleteRes = await makeJsonRequest(`/documents/${doc1.id}`, 'DELETE');
+    // 12.1 Unauthenticated delete must be rejected with 401
+    const unauthDeleteRes = await makeJsonRequest(`/documents/${doc1.id}`, 'DELETE');
+    if (unauthDeleteRes.status !== 401) {
+      throw new Error(`Expected 401 Unauthorized for unauthenticated DELETE, got ${unauthDeleteRes.status}`);
+    }
+    console.log('   ✅ Correctly rejected unauthenticated DELETE request with 401 Unauthorized.');
+
+    // 12.2 Authenticated delete succeeds
+    const deleteRes = await makeJsonRequest(`/documents/${doc1.id}`, 'DELETE', null, testUserToken);
     console.log('   Soft delete response:', deleteRes.data);
     if (deleteRes.status !== 200 || deleteRes.data.data.softDelete !== true) {
       throw new Error('Soft delete failed or softDelete flag was not true');

@@ -2,6 +2,21 @@ const { eq, and, or, ilike, gte, lte, desc, asc, sql, inArray, isNull } = requir
 const { db } = require('../db');
 const { DocumentDetails } = require('../models');
 const documentCaShareRepository = require('./documentCaShare.repository');
+const { DocumentType } = require('../enums');
+
+const SORT_COLUMNS = {
+  createdAt: DocumentDetails.createdAt,
+  updatedAt: DocumentDetails.updatedAt,
+  documentDate: DocumentDetails.documentDate,
+  documentName: DocumentDetails.documentName,
+  documentType: DocumentDetails.documentType,
+  fileSize: DocumentDetails.fileSize,
+};
+
+const getSortOrder = (sortBy, order) => {
+  const column = SORT_COLUMNS[sortBy] || DocumentDetails.createdAt;
+  return String(order || 'desc').toLowerCase() === 'asc' ? asc(column) : desc(column);
+};
 
 /**
  * Document Repository
@@ -27,6 +42,20 @@ class DocumentRepository {
       googleDriveFileId: caShare?.googleDriveFileId || null,
       googleDriveViewUrl: caShare?.googleDriveWebViewLink || null,
     };
+  }
+
+  /**
+   * Helper to batch enrich document rows with CA share details
+   * @param {Array} rows
+   * @returns {Promise<Array>}
+   */
+  async _enrichDocumentsWithShares(rows) {
+    if (!rows || rows.length === 0) return [];
+    let shareMap = new Map();
+    try {
+      shareMap = await documentCaShareRepository.findByDocumentIds(rows.map((r) => r.id));
+    } catch {}
+    return rows.map((r) => this._enrichDocument(r, shareMap.get(r.id)));
   }
 
   /**
@@ -148,6 +177,21 @@ class DocumentRepository {
       conditions.push(eq(DocumentDetails.uploadedBy, filters.uploadedBy));
     }
 
+    // Filter by isSharedWithCa (boolean: true or false)
+    const shareFilter = filters.isSharedWithCa !== undefined ? filters.isSharedWithCa : filters.isShareWithCa;
+    if (shareFilter !== undefined && shareFilter !== null && shareFilter !== '') {
+      const isShared = String(shareFilter).trim().toLowerCase() === 'true' || shareFilter === true;
+      if (isShared) {
+        conditions.push(
+          sql`EXISTS (SELECT 1 FROM document_ca_shares WHERE document_ca_shares."documentId" = ${DocumentDetails.id})`
+        );
+      } else {
+        conditions.push(
+          sql`NOT EXISTS (SELECT 1 FROM document_ca_shares WHERE document_ca_shares."documentId" = ${DocumentDetails.id})`
+        );
+      }
+    }
+
     return conditions;
   }
 
@@ -159,25 +203,8 @@ class DocumentRepository {
    * @returns {Promise<{ rows: Array, page?: number, limit?: number, totalPages?: number }>}
    */
   async getAllActiveDocuments(options = {}) {
-    const sortColumnMap = {
-      createdAt: DocumentDetails.createdAt,
-      updatedAt: DocumentDetails.updatedAt,
-      documentDate: DocumentDetails.documentDate,
-      documentName: DocumentDetails.documentName,
-      documentType: DocumentDetails.documentType,
-      fileSize: DocumentDetails.fileSize,
-    };
-
-    const sortColumn = sortColumnMap[options.sortBy] || DocumentDetails.createdAt;
-    const sortDirection = String(options.order || 'desc').toLowerCase() === 'asc' ? asc : desc;
-
-    // Filter by softDelete = false and scope to authenticated user if uploadedBy is provided
-    const conditions = [eq(DocumentDetails.softDelete, false)];
-    if (options.uploadedBy) {
-      conditions.push(eq(DocumentDetails.uploadedBy, options.uploadedBy));
-    }
-
-    const whereClause = and(...conditions);
+    const conditions = this._buildConditions(options);
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     const hasLimit = options.limit !== undefined && options.limit !== null && options.limit !== '';
     const limit = hasLimit ? Math.max(1, parseInt(options.limit, 10)) : null;
@@ -187,33 +214,21 @@ class DocumentRepository {
       .select()
       .from(DocumentDetails)
       .where(whereClause)
-      .orderBy(sortDirection(sortColumn));
+      .orderBy(getSortOrder(options.sortBy, options.order));
 
     if (limit) {
-      const offset = (page - 1) * limit;
-      query = query.limit(limit).offset(offset);
+      query = query.limit(limit).offset((page - 1) * limit);
     }
 
     const rows = await query;
+    const enrichedRows = await this._enrichDocumentsWithShares(rows);
 
-    let shareMap = new Map();
-    if (rows.length > 0) {
-      try {
-        const ids = rows.map((r) => r.id);
-        shareMap = await documentCaShareRepository.findByDocumentIds(ids);
-      } catch {
-        // Graceful fallback
-      }
-    }
-
-    const response = {
-      rows: rows.map((r) => this._enrichDocument(r, shareMap.get(r.id))),
-    };
+    const response = { rows: enrichedRows };
 
     if (hasLimit || options.page) {
       response.page = page;
-      response.limit = limit || rows.length;
-      response.totalPages = limit ? Math.max(1, Math.ceil(rows.length / limit)) : 1;
+      response.limit = limit || enrichedRows.length;
+      response.totalPages = limit ? Math.max(1, Math.ceil(enrichedRows.length / limit)) : 1;
     }
 
     return response;
@@ -240,8 +255,8 @@ class DocumentRepository {
     const statsResult = await db
       .select({
         total: sql`count(*)::int`,
-        incomeInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = 'income')::int`,
-        expenseInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = 'expense')::int`,
+        incomeInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.INCOME})::int`,
+        expenseInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.EXPENSE})::int`,
         pdfCount: sql`count(*) filter (where lower(${DocumentDetails.fileType}) like '%pdf%' or lower(${DocumentDetails.originalFileName}) like '%.pdf')::int`,
       })
       .from(DocumentDetails)
@@ -273,60 +288,36 @@ class DocumentRepository {
     const conditions = this._buildConditions(options);
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    // Sorting column mapping
-    const sortColumnMap = {
-      createdAt: DocumentDetails.createdAt,
-      updatedAt: DocumentDetails.updatedAt,
-      documentDate: DocumentDetails.documentDate,
-      documentName: DocumentDetails.documentName,
-      documentType: DocumentDetails.documentType,
-      fileSize: DocumentDetails.fileSize,
-    };
-
-    const sortColumn = sortColumnMap[options.sortBy] || DocumentDetails.createdAt;
-    const sortDirection = String(options.order || 'desc').toLowerCase() === 'asc' ? asc : desc;
-
     // Execute queries for rows and total counts
     const [rows, countResult] = await Promise.all([
       db
         .select()
         .from(DocumentDetails)
         .where(whereClause)
-        .orderBy(sortDirection(sortColumn))
+        .orderBy(getSortOrder(options.sortBy, options.order))
         .limit(limit)
         .offset(offset),
       db
         .select({
           total: sql`count(*)::int`,
-          incomeInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = 'income')::int`,
-          expenseInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = 'expense')::int`,
+          incomeInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.INCOME})::int`,
+          expenseInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.EXPENSE})::int`,
         })
         .from(DocumentDetails)
         .where(whereClause),
     ]);
 
     const total = parseInt(countResult[0]?.total || '0', 10);
-    const incomeInvoiceCount = parseInt(countResult[0]?.incomeInvoiceCount || '0', 10);
-    const expenseInvoiceCount = parseInt(countResult[0]?.expenseInvoiceCount || '0', 10);
-
-    let shareMap = new Map();
-    if (rows.length > 0) {
-      try {
-        const ids = rows.map((r) => r.id);
-        shareMap = await documentCaShareRepository.findByDocumentIds(ids);
-      } catch {
-        // Graceful fallback
-      }
-    }
+    const enrichedRows = await this._enrichDocumentsWithShares(rows);
 
     return {
-      rows: rows.map((r) => this._enrichDocument(r, shareMap.get(r.id))),
+      rows: enrichedRows,
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit) || 1,
-      incomeInvoiceCount,
-      expenseInvoiceCount,
+      incomeInvoiceCount: parseInt(countResult[0]?.incomeInvoiceCount || '0', 10),
+      expenseInvoiceCount: parseInt(countResult[0]?.expenseInvoiceCount || '0', 10),
     };
   }
 

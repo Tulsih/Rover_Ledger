@@ -1,6 +1,7 @@
 const { eq, and } = require('drizzle-orm');
 const { db } = require('../db');
 const { RoverLedgers } = require('../models');
+const { Role } = require('../enums');
 
 /**
  * User Repository
@@ -9,6 +10,28 @@ const { RoverLedgers } = require('../models');
  * Keeps raw database queries isolated from business logic.
  */
 class UserRepository {
+  /**
+   * Return standardized sanitized user profile object
+   * @param {object} user
+   * @returns {object|null}
+   */
+  sanitizeUser(user) {
+    if (!user) return null;
+    return {
+      UserId: user.UserId,
+      FirstName: user.FirstName,
+      LastName: user.LastName,
+      FullName: user.FullName,
+      Email: user.Email,
+      Gender: user.Gender,
+      Role: user.Role,
+      Designation: user.Designation,
+      isActive: user.isActive,
+      CreatedAt: user.CreatedAt,
+      UpdatedAt: user.UpdatedAt,
+    };
+  }
+
   /**
    * Find an active, non-soft-deleted user by email address
    * @param {string} email - User's email
@@ -78,7 +101,7 @@ class UserRepository {
         LastName: userData.LastName || null,
         Email: userData.Email,
         Gender: userData.Gender || null,
-        Role: userData.Role || 'User',
+        Role: userData.Role || Role.USER,
         Designation: userData.Designation || null,
         FullName: userData.FullName || null,
         isActive: userData.isActive !== undefined ? userData.isActive : true,

@@ -2,6 +2,7 @@ const { drizzle } = require('drizzle-orm/node-postgres');
 const { Pool } = require('pg');
 const { env } = require('./configs/env');
 const schema = require('./models');
+const logger = require('./utils/logger.util');
 
 /**
  * Configure PostgreSQL Connection Pool
@@ -18,7 +19,7 @@ const pool = new Pool({
 
 // Event listener for unexpected database errors
 pool.on('error', (err) => {
-  console.error('[Database Pool Error]:', err.message);
+  logger.error({ err }, '[Database Pool Error]: ' + err.message);
 });
 
 /**
@@ -27,7 +28,7 @@ pool.on('error', (err) => {
 const db = drizzle(pool, { schema });
 
 /**
- * Automatically ensures company_google_configs and document_ca_shares tables exist in PostgreSQL
+ * Automatically ensures company_google_configs and document_ca_shares tables and unique indexes exist
  */
 const ensureGoogleTablesExist = async () => {
   try {
@@ -54,10 +55,29 @@ const ensureGoogleTablesExist = async () => {
       );
 
       ALTER TABLE document_ca_shares ALTER COLUMN "sharedByUserId" DROP NOT NULL;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_document_ca_shares_unique_doc ON document_ca_shares ("documentId");
     `);
-    console.log('✅ Google Drive integration tables verified in PostgreSQL.');
+    logger.info('✅ Google Drive integration tables & unique index verified in PostgreSQL.');
   } catch (error) {
-    console.error('[Google Tables Init Error]:', error.message);
+    logger.error({ error }, '[Google Tables Init Error]: ' + error.message);
+  }
+};
+
+/**
+ * Automatically ensures performance indexes exist on document_details table
+ */
+const ensurePerformanceIndexesExist = async () => {
+  try {
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_document_details_uploaded_by ON document_details ("uploadedBy");
+      CREATE INDEX IF NOT EXISTS idx_document_details_soft_delete_uploaded_by ON document_details ("softDelete", "uploadedBy");
+      CREATE INDEX IF NOT EXISTS idx_document_details_soft_delete_created_at ON document_details ("softDelete", "createdAt");
+      CREATE INDEX IF NOT EXISTS idx_document_details_document_date ON document_details ("documentDate");
+    `);
+    logger.info('✅ Performance indexes on document_details verified in PostgreSQL.');
+  } catch (error) {
+    logger.error({ error }, '[Performance Indexes Init Error]: ' + error.message);
   }
 };
 
@@ -67,12 +87,13 @@ const ensureGoogleTablesExist = async () => {
 const testConnection = async () => {
   try {
     const client = await pool.connect();
-    console.log('✅ PostgreSQL database connected successfully to:', env.dbName);
+    logger.info(`✅ PostgreSQL database connected successfully to: ${env.dbName}`);
     client.release();
     await ensureGoogleTablesExist();
+    await ensurePerformanceIndexesExist();
     return true;
   } catch (error) {
-    console.error('❌ Database connection failed:', error.message);
+    logger.error({ error }, `❌ Database connection failed: ${error.message}`);
     return false;
   }
 };
@@ -82,4 +103,5 @@ module.exports = {
   pool,
   testConnection,
   ensureGoogleTablesExist,
+  ensurePerformanceIndexesExist,
 };

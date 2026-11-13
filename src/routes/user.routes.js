@@ -12,13 +12,13 @@ const { authenticateToken } = require('../middlewares/auth.middleware');
  */
 
 // API 2: Fetch current authenticated user's profile
-router.get('/profile', authenticateToken, userController.getProfile.bind(userController));
+router.get('/profile', authenticateToken, userController.getProfile);
 
 // API 3: Update current authenticated user's profile
-router.put('/profile', authenticateToken, userController.updateProfile.bind(userController));
-router.patch('/profile', authenticateToken, userController.updateProfile.bind(userController));
+router.put('/profile', authenticateToken, userController.updateProfile);
+router.patch('/profile', authenticateToken, userController.updateProfile);
 
 // Permanent Account Deletion: Delete user, uploaded OneDrive files, and all DB records
-router.delete('/profile', authenticateToken, userController.deleteProfile.bind(userController));
+router.delete('/profile', authenticateToken, userController.deleteProfile);
 
 module.exports = router;

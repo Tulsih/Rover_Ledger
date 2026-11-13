@@ -12,6 +12,19 @@ let cachedToken = null;
 let tokenExpiresAt = 0;
 
 /**
+ * Standard error extractor for Microsoft Graph API requests
+ */
+const handleGraphError = (error, defaultMessage, tag = 'OneDrive') => {
+  const errorDetails = error.response ? error.response.data : error.message;
+  console.error(`[${tag} Error]:`, errorDetails);
+  throw new Error(
+    error.response?.data?.error?.message ||
+    error.response?.data?.error_description ||
+    defaultMessage
+  );
+};
+
+/**
  * Obtains an application access token from Microsoft Entra ID using Client Credentials Grant.
  * Caches token in memory and refreshes automatically when expiring within 5 minutes.
  * 
@@ -44,12 +57,7 @@ const getGraphAccessToken = async () => {
     tokenExpiresAt = now + (response.data.expires_in || 3600);
     return cachedToken;
   } catch (error) {
-    const errorDetails = error.response ? error.response.data : error.message;
-    console.error('[Microsoft Graph Auth Error]:', errorDetails);
-    throw new Error(
-      error.response?.data?.error_description ||
-      'Failed to obtain access token from Microsoft Entra ID'
-    );
+    handleGraphError(error, 'Failed to obtain access token from Microsoft Entra ID', 'Microsoft Graph Auth');
   }
 };
 
@@ -92,12 +100,7 @@ const uploadFileToOneDrive = async ({ fileName, buffer, mimeType }) => {
       lastModifiedDateTime: item.lastModifiedDateTime,
     };
   } catch (error) {
-    const errorDetails = error.response ? error.response.data : error.message;
-    console.error('[OneDrive File Upload Error]:', errorDetails);
-    throw new Error(
-      error.response?.data?.error?.message ||
-      'Failed to upload file to Microsoft OneDrive'
-    );
+    handleGraphError(error, 'Failed to upload file to Microsoft OneDrive', 'OneDrive File Upload');
   }
 };
 
@@ -128,12 +131,7 @@ const getFileMetadataFromOneDrive = async (itemId) => {
       mimeType: item.file?.mimeType || null,
     };
   } catch (error) {
-    const errorDetails = error.response ? error.response.data : error.message;
-    console.error('[OneDrive Get Metadata Error]:', errorDetails);
-    throw new Error(
-      error.response?.data?.error?.message ||
-      'Failed to get document metadata from Microsoft OneDrive'
-    );
+    handleGraphError(error, 'Failed to get document metadata from Microsoft OneDrive', 'OneDrive Get Metadata');
   }
 };
 
@@ -162,12 +160,7 @@ const getFileStreamFromOneDrive = async (itemId) => {
       contentLength: response.headers['content-length'],
     };
   } catch (error) {
-    const errorDetails = error.response ? error.response.data : error.message;
-    console.error('[OneDrive Get Content Error]:', errorDetails);
-    throw new Error(
-      error.response?.data?.error?.message ||
-      'Failed to fetch document content from Microsoft OneDrive'
-    );
+    handleGraphError(error, 'Failed to fetch document content from Microsoft OneDrive', 'OneDrive Get Content');
   }
 };
 
@@ -189,12 +182,7 @@ const deleteFileFromOneDrive = async (itemId) => {
     });
     return true;
   } catch (error) {
-    const errorDetails = error.response ? error.response.data : error.message;
-    console.error('[OneDrive Delete Error]:', errorDetails);
-    throw new Error(
-      error.response?.data?.error?.message ||
-      'Failed to delete file from Microsoft OneDrive'
-    );
+    handleGraphError(error, 'Failed to delete file from Microsoft OneDrive', 'OneDrive Delete');
   }
 };
 

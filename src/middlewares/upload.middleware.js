@@ -28,7 +28,7 @@ const uploadDocumentFile = (req, res, next) => {
   uploadHandler(req, res, (err) => {
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return sendError(res, 400, `File size exceeds the 50MB limit.`);
+        return sendError(res, 400, 'File size exceeds the 50MB limit.');
       }
       return sendError(res, 400, `File upload error: ${err.message}`);
     } else if (err) {

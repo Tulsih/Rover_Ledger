@@ -403,21 +403,23 @@ flowchart LR
 
 1. **Zero Disk Footprint on Server**: Files are processed in memory and streamed directly to Microsoft OneDrive folder via Microsoft Graph API.
 2. **Resilience**: The backend caches the Microsoft Graph Access token and refreshes it before expiration.
-3. **Dual Scoping**: If the user is logged in (passes `Authorization: Bearer <token>`), the document is linked with `uploadedBy: user.UserId`. If unauthenticated, it is stored as a global ledger document.
+3. **Mandatory Authentication & User Scoping**: Uploading requires `Authorization: Bearer <token>`. The document is strictly linked to the authenticated user (`uploadedBy: user.UserId`).
 
 ---
 
 ### Upload Document Flow
-- **Endpoint**: `POST /documents/upload` (or `POST /documents`)
+- **Endpoint**: `POST /documents/upload`
+- **Security**: Bearer Token required (`Authorization: Bearer <token>`)
 - **Content-Type**: `multipart/form-data`
+- **Allowed Formats**: Documents (PDF, DOCX, TXT, XLSX) and Images (JPG, JPEG, PNG, WEBP, GIF)
 - **Max File Size**: `50 MB`
 
 #### Form Fields:
 | Field Name | Type | Required | Description |
 | :--- | :--- | :---: | :--- |
-| `file` | File Binary | ✅ Yes | The actual file/image (accepts field name `file`, `document`, or `image`) |
+| `file` | File Binary | ✅ Yes | The document or image file (accepts field name `file`, `document`, or `image`) |
 | `documentName` | String | ✅ Yes | Custom display name (e.g. `"Office Rent Invoice Oct 2026"`) |
-| `documentType` | String | ❌ No (Optional) | Allowed values: `'income'`, `'expense'`, or `null` |
+| `documentType` | String | ❌ No (Optional) | Allowed values: `'income'`, `'expense'`, or `null` (`DocumentType` enum) |
 | `documentDate` | String (Date) | ✅ Yes | Format: `YYYY-MM-DD` (e.g. `"2026-10-29"`) |
 
 #### Frontend Code Example (JavaScript / React):
@@ -484,12 +486,13 @@ const response = await api.post('/documents/upload', formData, {
 
 ---
 
-### Fetch Active Documents for Authenticated User
+### Fetch Active Documents (Role Scoped)
 - **Endpoint**: `GET /documents` (or `GET /rover-ledger/documents`)
 - **Headers**: `Authorization: Bearer <accessToken>` (Required)
-- **User Scoping**: Automatically extracts `UserId` from the Bearer Access Token.
-- **Description**: Returns the active documents (`softDelete: false AND uploadedBy = user.UserId`) for this user.
-- **Counts Removed**: Counts (`total`, `incomeInvoiceCount`, `expenseInvoiceCount`, `pdfCount`) have been moved to the dedicated `GET /documents/counts` API above for optimal performance and clean separation of concerns.
+- **Role Scoping**:
+  - **`Role: User`**: Exclusively returns active documents uploaded by the authenticated user (`softDelete: false AND uploadedBy = user.UserId`).
+  - **`Role: Admin`**: Returns **all active documents across all users** (`softDelete: false`). Admins can optionally provide `?uploadedBy=<userId>` in query parameters to view a specific user's documents.
+- **Counts Removed**: Counts (`total`, `incomeInvoiceCount`, `expenseInvoiceCount`, `pdfCount`) are provided by the dedicated `GET /documents/counts` API.
 
 #### Response Structure (`200 OK`):
 ```json
@@ -526,7 +529,7 @@ const response = await api.post('/documents/upload', formData, {
 ---
 
 ### Search & Filter Flow
-- **Endpoint**: `POST /documents/filter` (Also accepts `GET /documents/filter`)
+- **Endpoint**: `POST /documents/filter`
 - **Headers**: `Authorization: Bearer <token>` *(Optional)*
 - **Body (`application/json`)**:
 ```json
@@ -537,13 +540,19 @@ const response = await api.post('/documents/upload', formData, {
   "startDate": "2026-01-01",
   "endDate": "2026-12-31",
   "fileType": "application/pdf",
+  "isSharedWithCa": true,
   "page": 1,
   "limit": 10,
   "sortBy": "documentDate",
   "order": "desc"
 }
 ```
+> 💡 **New Filter Property (`isSharedWithCa`)**: Pass `true` to fetch only invoices shared with the CA in Google Drive, or `false` to fetch only unshared invoices. Omit or pass `undefined` to fetch both.
 
+> 🛡️ **Role Scoping in Filter**:
+> - If authenticated as **`Role: User`**: The search is automatically restricted to documents uploaded by this user (`uploadedBy = user.UserId`).
+> - If authenticated as **`Role: Admin`**: The search operates across **all active documents** in the platform. Admins can optionally pass `"uploadedBy": "<userId>"` in the body if they want to filter for a particular employee.
+>
 > ⚠️ **Key Rule**: As per backend specification, the filter criteria are provided in the **request body**, not as query parameters.
 
 ---
@@ -753,8 +762,10 @@ The backend includes a live Swagger UI:
 }
 ```
 
-#### 2. Connect Google Drive (OAuth 2.0)
+#### 2. Connect Google Drive (OAuth 2.0 - Admin Only)
 - **Endpoint**: `GET /auth/google/connect`
+- **Headers**: `Authorization: Bearer <adminAccessToken>` (Required - **Role: Admin**)
+- **Access Control**: Restricted strictly to users with **`Role: Admin`**. Regular users receive `403 Forbidden`.
 - **Query Parameters**:
   - `redirect=false` (Optional): Returns a JSON payload containing `{ authUrl }` for mobile / web apps to open in a browser or `expo-web-browser`.
   - `caEmail` (Optional): Target CA email to share folder with (defaults to `CA_EMAIL_DEFAULT` from environment).
@@ -774,8 +785,10 @@ The backend includes a live Swagger UI:
 - **Endpoint**: `GET /auth/google/callback` (or alias `GET /api/google/callback`)
 - **Description**: Google redirects here with `?code=...`. The backend exchanges the code for tokens, encrypts the refresh token, initializes the "Rover Ledger - CA Invoices" folder, and shares it with the CA email.
 
-#### 4. Disconnect Google Drive
+#### 4. Disconnect Google Drive (Admin Only)
 - **Endpoint**: `POST /auth/google/disconnect`
+- **Headers**: `Authorization: Bearer <adminAccessToken>` (Required - **Role: Admin**)
+- **Access Control**: Restricted strictly to users with **`Role: Admin`**. Regular users receive `403 Forbidden`.
 - **Description**: Marks the connection inactive and revokes cached access tokens.
 
 ---

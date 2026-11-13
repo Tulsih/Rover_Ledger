@@ -404,11 +404,11 @@ paths:
       summary: Upload Image/Document to Microsoft OneDrive & Save to DB
       description: |
         Uploads an image (PNG, JPG, JPEG, WEBP, GIF) or any document file (PDF, DOCX, TXT, etc.) directly into the **RoverLedger** Microsoft OneDrive folder.
-        The file metadata is persisted in the PostgreSQL `document_details` table.
+        The file metadata is persisted in the PostgreSQL `document_details` table with user ownership tracking.
+        **Security**: Requires an authenticated session via Bearer Token.
       operationId: uploadDocument
       security:
         - bearerAuth: []
-        - {}
       requestBody:
         required: true
         content:
@@ -452,6 +452,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized - Invalid or missing token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /documents/counts:
     get:
@@ -485,14 +491,47 @@ paths:
     get:
       tags:
         - Document Management
-      summary: Fetch Active Documents for Authenticated User
+      summary: Fetch Active Documents (Role Scoped)
       description: |
-        Retrieves active documents (`softDelete = false`) uploaded by the currently authenticated user based on the Bearer Access Token.
-        No filter parameters are required—simply click "Execute" to fetch this user's active documents.
-        Also calculates and returns `incomeInvoiceCount` and `expenseInvoiceCount` scoped strictly to this user.
+        Retrieves active documents (softDelete = false).
+        - Role User: Exclusively returns active documents uploaded by the authenticated user.
+        - Role Admin: Returns all active documents across all users. Admin can optionally pass ?uploadedBy=<userId> to inspect a specific user.
       operationId: getAllDocuments
       security:
         - bearerAuth: []
+      parameters:
+        - name: isSharedWithCa
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Filter by whether document is shared with CA in Google Drive (true or false)
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 10
+        - name: sortBy
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [createdAt, updatedAt, documentDate, documentName, fileSize]
+            default: createdAt
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [desc, asc]
+            default: desc
       responses:
         '200':
           description: Paginated list of all active documents with invoice counts
@@ -505,11 +544,11 @@ paths:
     post:
       tags:
         - Document Management
-      summary: Filter Documents (Request Body Only)
+      summary: Filter Documents (Role Scoped Request Body)
       description: |
-        Filter documents by criteria passed in the **request body** (JSON).
-        Does NOT rely on query parameters.
-        If an **Authorization Bearer token** is provided in the headers, it automatically scopes the filtered results to documents uploaded by that authenticated user.
+        Filter documents by criteria passed in the request body (JSON).
+        - Role User: Scoped strictly to documents uploaded by the authenticated user.
+        - Role Admin: Queries across all active documents in the platform. Admin can pass uploadedBy in the body if desired.
       operationId: filterDocuments
       security:
         - bearerAuth: []
@@ -541,7 +580,10 @@ paths:
                   format: date
                   description: End of documentDate range (YYYY-MM-DD)
                   example: "2026-12-31"
-                  example: false
+                isSharedWithCa:
+                  type: boolean
+                  description: Filter by whether document has been shared with CA in Google Drive (true or false)
+                  example: true
                 search:
                   type: string
                   description: Global search term matching documentName or originalFileName
@@ -607,6 +649,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized - Invalid or missing token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
 
   /documents/{id}:
@@ -642,8 +690,10 @@ paths:
       tags:
         - Document Management
       summary: Delete Document & Remove from Microsoft OneDrive
-      description: Permanently removes the physical file from Microsoft OneDrive and marks the record as soft-deleted in the database (`softDelete = true`).
+      description: Permanently removes the physical file from Microsoft OneDrive and marks the record as soft-deleted in the database (`softDelete = true`). Requires authentication.
       operationId: softDeleteDocument
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -659,6 +709,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DocumentSingleResponse'
+        '401':
+          description: Unauthorized - Invalid or missing token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Document not found or already deleted
           content:
@@ -789,14 +845,17 @@ paths:
     get:
       tags:
         - Google Drive Integration
-      summary: Connect Company Google Drive (OAuth 2.0)
+      summary: Connect Company Google Drive (Admin Only)
       description: |
         Initiates Google OAuth 2.0 authorization to link the company Google Drive account.
+        **Access Control**: Restricted exclusively to users with **Role: Admin**.
         
         **Parameters**:
         - `redirect=false` (Optional): Returns JSON object with `authUrl` for mobile/SPA clients instead of 302 redirecting.
         - `caEmail` (Optional): CA Gmail address to grant Viewer permission to the shared folder.
       operationId: connectGoogleDrive
+      security:
+        - bearerAuth: []
       parameters:
         - name: redirect
           in: query
@@ -898,9 +957,13 @@ paths:
     post:
       tags:
         - Google Drive Integration
-      summary: Disconnect Google Drive
-      description: Disconnects the active Google Drive account and revokes active session tokens.
+      summary: Disconnect Google Drive (Admin Only)
+      description: |
+        Disconnects the active Google Drive account and revokes active session tokens.
+        **Access Control**: Restricted exclusively to users with **Role: Admin**.
       operationId: disconnectGoogleDrive
+      security:
+        - bearerAuth: []
       responses:
         '200':
           description: Disconnected successfully
@@ -923,6 +986,8 @@ paths:
         
         **Idempotent**: If already shared, returns existing share metadata without duplicate uploads.
       operationId: shareDocumentToCa
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -938,6 +1003,8 @@ paths:
           description: Document uploaded and shared with CA successfully
         '400':
           description: Company Google Drive not connected or invalid document ID
+        '401':
+          description: Unauthorized - Invalid or missing token
         '404':
           description: Document not found
 
@@ -987,7 +1054,8 @@ components:
           example: Male
         Role:
           type: string
-          description: Role for authorization
+          enum: [Admin, User]
+          description: User authorization role (Admin or User)
           example: User
         Designation:
           type: string

@@ -1,11 +1,11 @@
+const path = require("path");
 const documentRepository = require("../repositories/document.repository");
 const documentCaShareRepository = require("../repositories/documentCaShare.repository");
 const googleConfigRepository = require("../repositories/googleConfig.repository");
 const onedriveService = require("./onedrive.service");
 const googledriveService = require("./googledrive.service");
-
-// Allowed document types specified by user
-const ALLOWED_DOCUMENT_TYPES = ["income", "expense"];
+const { Role, DocumentType, DOCUMENT_TYPES, isValidDocumentType } = require("../enums");
+const logger = require("../utils/logger.util");
 
 // Standard UUID format validator (36-character hex with hyphens)
 const UUID_REGEX =
@@ -16,6 +16,26 @@ const UUID_REGEX =
  * Orchestrates business logic, validations, Microsoft OneDrive interactions, and database persistence.
  */
 class DocumentService {
+  /**
+   * Helper to validate and normalize documentType ('income', 'expense', or null)
+   */
+  _parseDocumentType(type) {
+    if (type === undefined || type === null || type === '') return null;
+    if (typeof type !== 'string') {
+      const err = new Error(`Invalid document type. Allowed values are '${DocumentType.INCOME}', '${DocumentType.EXPENSE}', or null.`);
+      err.statusCode = 400;
+      throw err;
+    }
+    const normalized = type.trim().toLowerCase();
+    if (['null', 'none', 'undefined', ''].includes(normalized)) return null;
+    if (normalized === DocumentType.INCOME) return DocumentType.INCOME;
+    if (normalized === DocumentType.EXPENSE || normalized === 'expence') return DocumentType.EXPENSE;
+
+    const err = new Error(`Invalid document type '${type}'. Allowed values are '${DocumentType.INCOME}', '${DocumentType.EXPENSE}', or null.`);
+    err.statusCode = 400;
+    throw err;
+  }
+
   async uploadDocument({
     file,
     documentName,
@@ -41,40 +61,8 @@ class DocumentService {
       err.statusCode = 400;
       throw err;
     }
-    // 3. Validation: documentType ('income', 'expense', or null/optional)
-    let finalDocumentType = null;
-    if (
-      documentType !== undefined &&
-      documentType !== null &&
-      documentType !== ""
-    ) {
-      if (typeof documentType !== "string") {
-        const err = new Error(
-          "Invalid document type. Allowed values are 'income', 'expense', or null.",
-        );
-        err.statusCode = 400;
-        throw err;
-      }
-      const normalizedType = documentType.trim().toLowerCase();
-      if (
-        normalizedType === "null" ||
-        normalizedType === "none" ||
-        normalizedType === "undefined" ||
-        normalizedType === ""
-      ) {
-        finalDocumentType = null;
-      } else if (normalizedType === "income") {
-        finalDocumentType = "income";
-      } else if (normalizedType === "expense" || normalizedType === "expence") {
-        finalDocumentType = "expense";
-      } else {
-        const err = new Error(
-          `Invalid document type '${documentType}'. Allowed values are 'income', 'expense', or null.`,
-        );
-        err.statusCode = 400;
-        throw err;
-      }
-    }
+    // 3. Validation & normalization: documentType
+    const finalDocumentType = this._parseDocumentType(documentType);
 
     // 4. Validation: Date of document
     if (!documentDate) {
@@ -100,8 +88,8 @@ class DocumentService {
     );
     const oneDriveTargetFileName = `${timestampPrefix}_${sanitizedOriginalName}`;
 
-    console.log(
-      `📤 Uploading '${file.originalname}' (${file.size} bytes) to Microsoft OneDrive folder...`,
+    logger.info(
+      `📤 Uploading '${file.originalname}' (${file.size} bytes) to Microsoft OneDrive folder...`
     );
 
     // 7. Upload to Microsoft OneDrive
@@ -111,8 +99,8 @@ class DocumentService {
       mimeType: file.mimetype,
     });
 
-    console.log(
-      `✅ File uploaded to OneDrive with item ID: ${onedriveResult.id}`,
+    logger.info(
+      `✅ File uploaded to OneDrive with item ID: ${onedriveResult.id}`
     );
 
     // 8. Persist metadata to PostgreSQL document_details table
@@ -140,7 +128,7 @@ class DocumentService {
   async filterDocuments(query = {}) {
     return documentRepository.findWithFilters(query);
   }
-  async getDocumentById(id, userId = null) {
+  async getDocumentById(id, userId = null, userRole = null) {
     const doc = await documentRepository.findById(id);
     if (!doc) {
       const err = new Error(`Document with ID '${id}' not found.`);
@@ -148,8 +136,9 @@ class DocumentService {
       throw err;
     }
 
-    // If document is owned by a user and requesting user does not match, deny access
-    if (userId && doc.uploadedBy && doc.uploadedBy !== userId) {
+    // If user is Admin, they have full access to view any active document
+    // If user is regular User, ensure they can only view documents they uploaded
+    if (userRole !== Role.ADMIN && userId && doc.uploadedBy && doc.uploadedBy !== userId) {
       const err = new Error(
         "Access denied. You do not have permission to view this document.",
       );
@@ -159,8 +148,8 @@ class DocumentService {
 
     return doc;
   }
-  async getDocumentFileStream(id, userId = null) {
-    const doc = await this.getDocumentById(id, userId);
+  async getDocumentFileStream(id, userId = null, userRole = null) {
+    const doc = await this.getDocumentById(id, userId, userRole);
 
     try {
       const { stream, contentType, contentLength } =
@@ -174,9 +163,8 @@ class DocumentService {
       };
     } catch (error) {
       if (error.statusCode) throw error;
-      console.error(
-        `Failed to fetch file stream from OneDrive for document ${id}:`,
-        error.message,
+      logger.error(
+        `Failed to fetch file stream from OneDrive for document ${id}: ${error.message}`
       );
       const err = new Error(
         "Unable to retrieve file content from Microsoft OneDrive.",
@@ -190,23 +178,23 @@ class DocumentService {
    * Soft delete a document and remove its physical file from Microsoft OneDrive
    * @param {string} id - Document UUID
    * @param {string|null} userId - Optional authenticated user ID to verify ownership
+   * @param {string|null} userRole - Optional role (Admin can delete any document)
    * @returns {Promise<object>} Soft-deleted document record
    */
-  async softDeleteDocument(id, userId = null) {
-    // 1. Fetch document to verify existence and user ownership
-    const doc = await this.getDocumentById(id, userId);
+  async softDeleteDocument(id, userId = null, userRole = null) {
+    // 1. Fetch document to verify existence and user ownership (Admin bypasses ownership restriction)
+    const doc = await this.getDocumentById(id, userId, userRole);
 
     // 2. Permanently remove physical file from Microsoft OneDrive
     if (doc.oneDriveItemId) {
       try {
         await onedriveService.deleteFileFromOneDrive(doc.oneDriveItemId);
-        console.log(
-          `🗑️ Deleted file from OneDrive: ${doc.oneDriveItemId} (${doc.originalFileName || doc.documentName})`,
+        logger.info(
+          `🗑️ Deleted file from OneDrive: ${doc.oneDriveItemId} (${doc.originalFileName || doc.documentName})`
         );
       } catch (oneDriveErr) {
-        console.warn(
-          `[OneDrive Warning]: Could not delete file ${doc.oneDriveItemId}:`,
-          oneDriveErr.message,
+        logger.warn(
+          `[OneDrive Warning]: Could not delete file ${doc.oneDriveItemId}: ${oneDriveErr.message}`
         );
       }
     }
@@ -229,9 +217,10 @@ class DocumentService {
    *
    * @param {string[]} inputIds - Array of document UUIDs
    * @param {string|null} userId - Optional authenticated user ID to verify ownership
+   * @param {string|null} userRole - Optional authenticated user role
    * @returns {Promise<object>} Summary of bulk soft deletion
    */
-  async bulkSoftDeleteDocuments(inputIds, userId = null) {
+  async bulkSoftDeleteDocuments(inputIds, userId = null, userRole = null) {
     if (!inputIds || !Array.isArray(inputIds) || inputIds.length === 0) {
       const err = new Error(
         'Please provide a non-empty array of document IDs to delete (e.g. { "ids": ["id1", "id2"] }).',
@@ -265,9 +254,11 @@ class DocumentService {
 
     let updatedDocuments = [];
     if (validUuidIds.length > 0) {
+      // If user is Admin, allow deleting across any document by passing null as owner filter
+      const targetOwnerId = userRole === Role.ADMIN ? null : userId;
       updatedDocuments = await documentRepository.bulkSoftDelete(
         validUuidIds,
-        userId,
+        targetOwnerId,
       );
 
       // Permanently remove physical files from Microsoft OneDrive for successfully soft-deleted documents
@@ -281,13 +272,12 @@ class DocumentService {
                 await onedriveService.deleteFileFromOneDrive(
                   doc.oneDriveItemId,
                 );
-                console.log(
-                  `🗑️ Deleted OneDrive file in bulk: ${doc.oneDriveItemId}`,
+                logger.info(
+                  `🗑️ Deleted OneDrive file in bulk: ${doc.oneDriveItemId}`
                 );
               } catch (err) {
-                console.warn(
-                  `[OneDrive Warning]: Could not delete OneDrive item ${doc.oneDriveItemId}:`,
-                  err.message,
+                logger.warn(
+                  `[OneDrive Warning]: Could not delete OneDrive item ${doc.oneDriveItemId}: ${err.message}`
                 );
               }
             }
@@ -327,9 +317,10 @@ class DocumentService {
    * 
    * @param {string} documentId - Document UUID
    * @param {string|null} userId - Authenticated user ID
+   * @param {string|null} userRole - Authenticated user role
    * @returns {Promise<object>} Share details with document object
    */
-  async shareDocumentWithCa(documentId, userId = null) {
+  async shareDocumentWithCa(documentId, userId = null, userRole = null) {
     if (!documentId) {
       const err = new Error("Document ID is required.");
       err.statusCode = 400;
@@ -343,7 +334,7 @@ class DocumentService {
     }
 
     // 1. Fetch document and verify user access
-    const doc = await this.getDocumentById(documentId, userId);
+    const doc = await this.getDocumentById(documentId, userId, userRole);
 
     // 2. Check if already shared with CA (Idempotent return)
     const existingShare = await documentCaShareRepository.findByDocumentId(documentId);
@@ -385,7 +376,7 @@ class DocumentService {
     }
 
     // 6. Fetch file stream from Microsoft OneDrive
-    const { stream, contentType } = await this.getDocumentFileStream(documentId, userId);
+    const { stream, contentType } = await this.getDocumentFileStream(documentId, userId, userRole);
     const chunks = [];
     for await (const chunk of stream) {
       chunks.push(chunk);
@@ -410,7 +401,7 @@ class DocumentService {
       buffer: fileBuffer,
     });
 
-    console.log(`📤 Uploaded invoice '${targetFileName}' to Google Drive (ID: ${uploadedFile.id})`);
+    logger.info(`📤 Uploaded invoice '${targetFileName}' to Google Drive (ID: ${uploadedFile.id})`);
 
     // 9. Record share in database
     const shareRecord = await documentCaShareRepository.createShare({

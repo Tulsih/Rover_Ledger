@@ -1,10 +1,32 @@
 const documentService = require('../services/document.service');
 const { sendSuccess, sendError } = require('../utils/response.util');
+const { Role } = require('../enums');
 
 /**
  * Document Controller
  * Handles HTTP requests for uploading, fetching, filtering, downloading, and soft-deleting documents.
  */
+/**
+ * Helper to pipe file stream to HTTP response with standard headers
+ */
+const pipeFileStream = (res, { stream, doc, contentType, contentLength, inline = false }) => {
+  const filename = doc.originalFileName || `${doc.documentName}.bin`;
+  const disposition = inline ? 'inline' : 'attachment';
+
+  res.setHeader('Content-Type', contentType || doc.fileType || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(filename)}"`);
+  if (contentLength) res.setHeader('Content-Length', contentLength);
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+
+  stream.on('error', (streamErr) => {
+    console.error('[Document Stream Error]:', streamErr.message);
+    if (!res.headersSent) sendError(res, 502, 'Failed streaming file content from Microsoft OneDrive');
+  });
+
+  return stream.pipe(res);
+};
+
 class DocumentController {
   /**
    * Upload Document & Sync to Microsoft OneDrive
@@ -38,23 +60,30 @@ class DocumentController {
   }
 
   /**
-   * Fetch All Active Documents for the Authenticated User
+   * Fetch All Active Documents
    * GET /documents
-   * Returns active documents list for the authenticated user without counts.
+   * - Role.USER: Returns only active documents uploaded by the authenticated user.
+   * - Role.ADMIN: Returns all active documents across all users (softDelete = false).
+   *               Admin can optionally pass ?uploadedBy=<userId> to filter by a specific user.
    */
   async getAllDocuments(req, res, next) {
     try {
-      const userId = req.user?.UserId;
-      if (!userId) {
+      const user = req.user;
+      if (!user?.UserId) {
         return sendError(res, 401, 'Access denied. Please provide a valid Authorization Bearer token.');
       }
 
+      const isAdmin = user.Role === Role.ADMIN;
+      // Admin sees all active documents across all users by default; User sees only their own
+      const uploadedBy = isAdmin ? (req.query?.uploadedBy || null) : user.UserId;
+
       const options = {
-        uploadedBy: userId,
+        uploadedBy,
         page: req.query?.page,
         limit: req.query?.limit,
         sortBy: req.query?.sortBy,
         order: req.query?.order,
+        isSharedWithCa: req.query?.isSharedWithCa ?? req.query?.isShareWithCa,
       };
 
       const result = await documentService.getAllDocuments(options);
@@ -67,25 +96,22 @@ class DocumentController {
   }
 
   /**
-   * Fetch All 4 Document Counts for the Authenticated User
+   * Fetch Document Counts
    * GET /documents/counts (or GET /documents/count)
-   * 
-   * Returns:
-   * {
-   *   "total": number,
-   *   "incomeInvoiceCount": number,
-   *   "expenseInvoiceCount": number,
-   *   "pdfCount": number
-   * }
+   * - Role.USER: Scoped to the authenticated user's uploaded documents.
+   * - Role.ADMIN: Returns global counts across all users (or for specific user if ?uploadedBy is provided).
    */
   async getDocumentCounts(req, res, next) {
     try {
-      const userId = req.user?.UserId;
-      if (!userId) {
+      const user = req.user;
+      if (!user?.UserId) {
         return sendError(res, 401, 'Access denied. Please provide a valid Authorization Bearer token.');
       }
 
-      const counts = await documentService.getDocumentCounts(userId);
+      const isAdmin = user.Role === Role.ADMIN;
+      const targetUserId = isAdmin ? (req.query?.uploadedBy || null) : user.UserId;
+
+      const counts = await documentService.getDocumentCounts(targetUserId);
       return sendSuccess(res, 200, 'Document counts fetched successfully', counts);
     } catch (error) {
       console.error('[DocumentController.getDocumentCounts Error]:', error.message);
@@ -97,16 +123,26 @@ class DocumentController {
   /**
    * Filter Documents
    * POST /documents/filter
-   * Must contain only req body not query, and can scope based on authtoken
+   * - Role.USER: Filter is strictly restricted to documents uploaded by this user.
+   * - Role.ADMIN: Admin can query across all users' documents (where softDelete = false),
+   *               or filter by a specific uploadedBy if provided in body.
    */
   async filterDocuments(req, res, next) {
     try {
       // Must contain only req body not query
       const filterParams = { ...(req.body || {}) };
+      const user = req.user;
 
-      // If authtoken is present, scope filter to this authenticated user
-      if (req.user?.UserId) {
-        filterParams.uploadedBy = req.user.UserId;
+      if (user?.Role === Role.ADMIN) {
+        // Admin: allow querying across all active documents unless explicitly filtered by uploadedBy
+        if (!filterParams.uploadedBy) {
+          delete filterParams.uploadedBy;
+        }
+      } else {
+        // Regular User: strictly restrict filter to this authenticated user
+        if (user?.UserId) {
+          filterParams.uploadedBy = user.UserId;
+        }
       }
 
       const result = await documentService.filterDocuments(filterParams);
@@ -121,13 +157,14 @@ class DocumentController {
   /**
    * Get Single Document Details by ID
    * GET /documents/:id
-   * Can fetch based on authtoken
+   * Admin can view any document; regular User can only view their own
    */
   async getDocumentById(req, res, next) {
     try {
       const { id } = req.params;
       const userId = req.user?.UserId || null;
-      const doc = await documentService.getDocumentById(id, userId);
+      const userRole = req.user?.Role || null;
+      const doc = await documentService.getDocumentById(id, userId, userRole);
       return sendSuccess(res, 200, 'Document details fetched successfully', doc);
     } catch (error) {
       console.error('[DocumentController.getDocumentById Error]:', error.message);
@@ -144,38 +181,11 @@ class DocumentController {
    */
   async getDocumentContent(req, res, next) {
     try {
-      const { id } = req.params;
-      const userId = req.user?.UserId || null;
-
-      const { stream, doc, contentType, contentLength } = await documentService.getDocumentFileStream(id, userId);
-
-      const filename = doc.originalFileName || `${doc.documentName}.bin`;
-
-      res.setHeader('Content-Type', contentType || doc.fileType || 'application/octet-stream');
-      res.setHeader(
-        'Content-Disposition',
-        `inline; filename="${encodeURIComponent(filename)}"`
-      );
-      if (contentLength) {
-        res.setHeader('Content-Length', contentLength);
-      }
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Cache-Control', 'private, max-age=3600');
-
-      // Handle stream errors
-      stream.on('error', (streamErr) => {
-        console.error('[DocumentController.getDocumentContent Stream Error]:', streamErr.message);
-        if (!res.headersSent) {
-          sendError(res, 502, 'Failed streaming file content from Microsoft OneDrive');
-        }
-      });
-
-      // Pipe OneDrive stream directly into HTTP response
-      stream.pipe(res);
+      const fileData = await documentService.getDocumentFileStream(req.params.id, req.user?.UserId, req.user?.Role);
+      return pipeFileStream(res, { ...fileData, inline: true });
     } catch (error) {
       console.error('[DocumentController.getDocumentContent Error]:', error.message);
-      const statusCode = error.statusCode || 500;
-      return sendError(res, statusCode, error.message);
+      return sendError(res, error.statusCode || 500, error.message);
     }
   }
 
@@ -186,38 +196,12 @@ class DocumentController {
    */
   async downloadDocument(req, res, next) {
     try {
-      const { id } = req.params;
-      const userId = req.user?.UserId || null;
       const isInline = String(req.query.inline || '').toLowerCase() === 'true';
-
-      const { stream, doc, contentType, contentLength } = await documentService.getDocumentFileStream(id, userId);
-
-      const filename = doc.originalFileName || `${doc.documentName}.bin`;
-      const dispositionType = isInline ? 'inline' : 'attachment';
-
-      res.setHeader('Content-Type', contentType || 'application/octet-stream');
-      res.setHeader(
-        'Content-Disposition',
-        `${dispositionType}; filename="${encodeURIComponent(filename)}"`
-      );
-      if (contentLength) {
-        res.setHeader('Content-Length', contentLength);
-      }
-
-      // Handle stream errors
-      stream.on('error', (streamErr) => {
-        console.error('[File Stream Error]:', streamErr.message);
-        if (!res.headersSent) {
-          sendError(res, 502, 'Failed streaming file from Microsoft OneDrive');
-        }
-      });
-
-      // Pipe OneDrive stream directly into HTTP response
-      stream.pipe(res);
+      const fileData = await documentService.getDocumentFileStream(req.params.id, req.user?.UserId, req.user?.Role);
+      return pipeFileStream(res, { ...fileData, inline: isInline });
     } catch (error) {
       console.error('[DocumentController.downloadDocument Error]:', error.message);
-      const statusCode = error.statusCode || 500;
-      return sendError(res, statusCode, error.message);
+      return sendError(res, error.statusCode || 500, error.message);
     }
   }
 
@@ -229,7 +213,8 @@ class DocumentController {
     try {
       const { id } = req.params;
       const userId = req.user?.UserId || null;
-      const deletedDoc = await documentService.softDeleteDocument(id, userId);
+      const userRole = req.user?.Role || null;
+      const deletedDoc = await documentService.softDeleteDocument(id, userId, userRole);
       return sendSuccess(res, 200, 'Document soft deleted successfully', deletedDoc);
     } catch (error) {
       console.error('[DocumentController.softDeleteDocument Error]:', error.message);
@@ -259,7 +244,8 @@ class DocumentController {
       }
 
       const userId = req.user?.UserId || null;
-      const result = await documentService.bulkSoftDeleteDocuments(ids, userId);
+      const userRole = req.user?.Role || null;
+      const result = await documentService.bulkSoftDeleteDocuments(ids, userId, userRole);
 
       return sendSuccess(
         res,
@@ -282,8 +268,9 @@ class DocumentController {
     try {
       const documentId = req.params?.id;
       const userId = req.user?.UserId || null;
+      const userRole = req.user?.Role || null;
 
-      const result = await documentService.shareDocumentWithCa(documentId, userId);
+      const result = await documentService.shareDocumentWithCa(documentId, userId, userRole);
 
       return sendSuccess(
         res,

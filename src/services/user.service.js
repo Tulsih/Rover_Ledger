@@ -3,6 +3,7 @@ const documentRepository = require('../repositories/document.repository');
 const refreshTokenRepository = require('../repositories/refreshToken.repository');
 const onedriveService = require('./onedrive.service');
 const { db } = require('../db');
+const { Role, ROLES, isValidRole } = require('../enums');
 
 /**
  * User Service
@@ -26,20 +27,7 @@ class UserService {
       throw new Error('Account is inactive. Please contact support.');
     }
 
-    // Return sanitized profile details
-    return {
-      UserId: user.UserId,
-      FirstName: user.FirstName,
-      LastName: user.LastName,
-      FullName: user.FullName,
-      Email: user.Email,
-      Gender: user.Gender,
-      Role: user.Role,
-      Designation: user.Designation,
-      isActive: user.isActive,
-      CreatedAt: user.CreatedAt,
-      UpdatedAt: user.UpdatedAt,
-    };
+    return userRepository.sanitizeUser(user);
   }
 
   /**
@@ -89,20 +77,7 @@ class UserService {
     }
 
     const updatedUser = await userRepository.updateUser(userId, fieldsToUpdate);
-
-    return {
-      UserId: updatedUser.UserId,
-      FirstName: updatedUser.FirstName,
-      LastName: updatedUser.LastName,
-      FullName: updatedUser.FullName,
-      Email: updatedUser.Email,
-      Gender: updatedUser.Gender,
-      Role: updatedUser.Role,
-      Designation: updatedUser.Designation,
-      isActive: updatedUser.isActive,
-      CreatedAt: updatedUser.CreatedAt,
-      UpdatedAt: updatedUser.UpdatedAt,
-    };
+    return userRepository.sanitizeUser(updatedUser);
   }
 
   /**
