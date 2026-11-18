@@ -82,6 +82,42 @@ const ensurePerformanceIndexesExist = async () => {
 };
 
 /**
+ * Automatically ensures database-level foreign key constraints exist with CASCADE deletion
+ */
+const ensureForeignKeyConstraintsExist = async () => {
+  try {
+    const checkRes = await pool.query(`
+      SELECT conname FROM pg_constraint 
+      WHERE conname = 'fk_document_details_uploaded_by';
+    `);
+
+    if (checkRes.rows.length === 0) {
+      // Clean up any potential orphaned records before adding foreign key constraint
+      await pool.query(`
+        UPDATE document_details 
+        SET "uploadedBy" = NULL 
+        WHERE "uploadedBy" IS NOT NULL 
+          AND "uploadedBy" NOT IN (SELECT "UserId" FROM "Rover_ledgers");
+      `);
+
+      // Add foreign key constraint with ON DELETE CASCADE
+      await pool.query(`
+        ALTER TABLE document_details
+        ADD CONSTRAINT fk_document_details_uploaded_by
+        FOREIGN KEY ("uploadedBy")
+        REFERENCES "Rover_ledgers"("UserId")
+        ON DELETE CASCADE;
+      `);
+      logger.info('✅ Foreign key constraint fk_document_details_uploaded_by (ON DELETE CASCADE) added to PostgreSQL.');
+    } else {
+      logger.info('✅ Foreign key constraint fk_document_details_uploaded_by (ON DELETE CASCADE) verified in PostgreSQL.');
+    }
+  } catch (error) {
+    logger.error({ error }, '[Foreign Key Init Error]: ' + error.message);
+  }
+};
+
+/**
  * Helper to test database connection health
  */
 const testConnection = async () => {
@@ -91,6 +127,7 @@ const testConnection = async () => {
     client.release();
     await ensureGoogleTablesExist();
     await ensurePerformanceIndexesExist();
+    await ensureForeignKeyConstraintsExist();
     return true;
   } catch (error) {
     logger.error({ error }, `❌ Database connection failed: ${error.message}`);
@@ -104,4 +141,5 @@ module.exports = {
   testConnection,
   ensureGoogleTablesExist,
   ensurePerformanceIndexesExist,
+  ensureForeignKeyConstraintsExist,
 };

@@ -1,4 +1,5 @@
 const { pgTable, uuid, varchar, boolean, timestamp, text, bigint, index } = require('drizzle-orm/pg-core');
+const { RoverLedgers } = require('./user.model');
 
 /**
  * DocumentDetails Table Schema
@@ -21,8 +22,8 @@ const DocumentDetails = pgTable('document_details', {
   oneDriveDownloadUrl: text('oneDriveDownloadUrl'),
   originalFileName: varchar('originalFileName', { length: 255 }).notNull(),
 
-  // User association (authenticated user who uploaded)
-  uploadedBy: uuid('uploadedBy'),
+  // User association (authenticated user who uploaded) with database-level CASCADE deletion
+  uploadedBy: uuid('uploadedBy').references(() => RoverLedgers.UserId, { onDelete: 'cascade' }),
 }, (table) => [
   index('idx_document_details_uploaded_by').on(table.uploadedBy),
   index('idx_document_details_soft_delete_uploaded_by').on(table.softDelete, table.uploadedBy),

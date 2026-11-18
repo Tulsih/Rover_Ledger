@@ -24,12 +24,13 @@ async function runRoleScopingTests() {
   if (isValidRole('Superadmin') || isValidRole('')) throw new Error('isValidRole failed on invalid roles');
 
   // DocumentType Enum Verification
-  if (DocumentType.INCOME !== 'income') throw new Error(`DocumentType.INCOME expected 'income', got '${DocumentType.INCOME}'`);
-  if (DocumentType.EXPENSE !== 'expense') throw new Error(`DocumentType.EXPENSE expected 'expense', got '${DocumentType.EXPENSE}'`);
-  if (!DOCUMENT_TYPES.includes('income') || !DOCUMENT_TYPES.includes('expense')) throw new Error('DOCUMENT_TYPES array missing income or expense');
-  if (DOCUMENT_TYPES.length !== 2) throw new Error(`DOCUMENT_TYPES length expected 2, got ${DOCUMENT_TYPES.length}`);
+  if (DocumentType.INCOME !== 'Income') throw new Error(`DocumentType.INCOME expected 'Income', got '${DocumentType.INCOME}'`);
+  if (DocumentType.EXPENSE !== 'Expense') throw new Error(`DocumentType.EXPENSE expected 'Expense', got '${DocumentType.EXPENSE}'`);
+  if (DocumentType.COMBINED !== 'Combined') throw new Error(`DocumentType.COMBINED expected 'Combined', got '${DocumentType.COMBINED}'`);
+  if (!DOCUMENT_TYPES.includes('Income') || !DOCUMENT_TYPES.includes('Expense') || !DOCUMENT_TYPES.includes('Combined')) throw new Error('DOCUMENT_TYPES array missing Income, Expense, or Combined');
+  if (DOCUMENT_TYPES.length !== 3) throw new Error(`DOCUMENT_TYPES length expected 3, got ${DOCUMENT_TYPES.length}`);
   if (!Object.isFrozen(DocumentType)) throw new Error('DocumentType enum object should be frozen');
-  if (!isValidDocumentType('income') || !isValidDocumentType('expense')) throw new Error('isValidDocumentType failed on valid types');
+  if (!isValidDocumentType('income') || !isValidDocumentType('Expense') || !isValidDocumentType('COMBINED')) throw new Error('isValidDocumentType failed on valid types');
   if (isValidDocumentType('memo') || isValidDocumentType('')) throw new Error('isValidDocumentType failed on invalid types');
   console.log('   ✅ Role & DocumentType Enums & Helpers validated successfully.\n');
 
@@ -110,7 +111,7 @@ async function runRoleScopingTests() {
     console.log('\n3️⃣ Seeding Test Documents for User A and User B...');
     const docA = await documentRepository.createDocument({
       documentName: 'Invoice_Alice_Jan2026',
-      documentType: 'expense',
+      documentType: DocumentType.EXPENSE,
       fileSize: 1024,
       fileType: 'application/pdf',
       documentDate: new Date('2026-01-15'),
@@ -122,7 +123,7 @@ async function runRoleScopingTests() {
 
     const docB = await documentRepository.createDocument({
       documentName: 'Invoice_Bob_Feb2026',
-      documentType: 'income',
+      documentType: DocumentType.INCOME,
       fileSize: 2048,
       fileType: 'application/pdf',
       documentDate: new Date('2026-02-15'),
@@ -189,6 +190,19 @@ async function runRoleScopingTests() {
     if (!adminFilterHasDocA || !adminFilterHasDocB) {
       throw new Error('Admin POST /documents/filter should return both Doc A and Doc B');
     }
+
+    // Verify uploadedByUser details are enriched in filter results
+    const foundDocA = adminFilterRows.find((d) => d.id === docA.id);
+    if (!foundDocA.uploadedByUser) {
+      throw new Error('Expected uploadedByUser to be enriched in document');
+    }
+    if (foundDocA.uploadedByUser.userId !== userA.UserId) {
+      throw new Error(`Expected uploadedByUser.userId '${userA.UserId}', got '${foundDocA.uploadedByUser.userId}'`);
+    }
+    if (foundDocA.uploadedByUser.email !== userA.Email) {
+      throw new Error(`Expected uploadedByUser.email '${userA.Email}', got '${foundDocA.uploadedByUser.email}'`);
+    }
+    console.log('   ✅ Uploader details (uploadedByUser) correctly attached to document.');
     console.log('   ✅ Admin POST /documents/filter returns all users documents.');
 
     console.log('\n9️⃣ Testing Admin filtering by specific user (uploadedBy)...');
@@ -197,14 +211,66 @@ async function runRoleScopingTests() {
     const aliceOnlyRows = resAdminFilterByAlice.data.data.rows;
     if (!aliceOnlyRows.some((d) => d.id === docA.id)) throw new Error('Expected Doc A in Alice filter');
     if (aliceOnlyRows.some((d) => d.id === docB.id)) throw new Error('Doc B should not appear when filtered by Alice');
-    console.log('   ✅ Admin can selectively filter by uploadedBy.');
+    console.log('   ✅ Admin can selectively filter by single uploadedBy ID.');
+
+    // Test filtering by array of uploadedBy IDs
+    const resAdminFilterMulti = await makeRequest('/documents/filter', 'POST', { uploadedBy: [userA.UserId, userB.UserId] }, tokenAdmin);
+    if (resAdminFilterMulti.status !== 200) throw new Error(`Expected 200, got ${resAdminFilterMulti.status}`);
+    const multiRows = resAdminFilterMulti.data.data.rows;
+    if (!multiRows.some((d) => d.id === docA.id) || !multiRows.some((d) => d.id === docB.id)) {
+      throw new Error('Expected both Doc A and Doc B when filtering by [userA.UserId, userB.UserId]');
+    }
+    console.log('   ✅ Admin can selectively filter by array of uploadedBy IDs.');
 
     console.log('\n🔟 Testing Admin GET /documents/:id on User B doc...');
     const resAdminGetDocB = await makeRequest(`/documents/${docB.id}`, 'GET', null, tokenAdmin);
     if (resAdminGetDocB.status !== 200) {
       throw new Error(`Admin should be allowed to view User B doc, got status ${resAdminGetDocB.status}`);
     }
+    if (!resAdminGetDocB.data.data.uploadedByUser || resAdminGetDocB.data.data.uploadedByUser.userId !== userB.UserId) {
+      throw new Error('Expected uploadedByUser on GET /documents/:id');
+    }
+    console.log('   ✅ Single document details also include uploadedByUser.');
     console.log('   ✅ Admin successfully views User B document details.');
+
+    // ==========================================
+    // Test 11: DB-Level ON DELETE CASCADE Verification
+    // ==========================================
+    console.log('\n1️⃣1️⃣ Testing DB-Level ON DELETE CASCADE (deleting user directly from DB)...');
+    const cascadeUser = await userRepository.createUser({
+      FirstName: 'Cascade',
+      LastName: 'Tester',
+      Email: `cascade.test.${Date.now()}@roverledger.com`,
+      Role: Role.USER,
+      isActive: true,
+    });
+
+    const cascadeDoc = await documentRepository.createDocument({
+      documentName: 'Cascade Test Document',
+      documentType: DocumentType.EXPENSE,
+      fileSize: 512,
+      fileType: 'application/pdf',
+      documentDate: new Date('2026-07-01'),
+      oneDriveItemId: 'mock_onedrive_cascade',
+      originalFileName: 'cascade_doc.pdf',
+      uploadedBy: cascadeUser.UserId,
+    });
+
+    // Verify document exists in DB before user deletion
+    const checkDocBefore = await db.select().from(DocumentDetails).where(eq(DocumentDetails.id, cascadeDoc.id));
+    if (checkDocBefore.length !== 1) {
+      throw new Error('Expected cascade document to exist in DB before user deletion');
+    }
+
+    // Delete user directly from Rover_ledgers table via SQL
+    await db.delete(RoverLedgers).where(eq(RoverLedgers.UserId, cascadeUser.UserId));
+
+    // Verify document was automatically deleted from document_details by PostgreSQL CASCADE
+    const checkDocAfter = await db.select().from(DocumentDetails).where(eq(DocumentDetails.id, cascadeDoc.id));
+    if (checkDocAfter.length !== 0) {
+      throw new Error('CASCADE FAILURE: Document details still exist in DB after user deletion!');
+    }
+    console.log('   ✅ Confirmed: Deleting user directly from DB automatically cascades and deletes all document_details records!');
 
     console.log('\n🎉 ALL ROLE ENUM & ROLE SCOPING TESTS PASSED 100%!\n');
   } finally {

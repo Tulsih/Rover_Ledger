@@ -126,6 +126,13 @@ async function runDocumentTests() {
   };
 
   try {
+    // Seed test user in Rover_ledgers to satisfy DB foreign key constraint
+    await pool.query(`
+      INSERT INTO "Rover_ledgers" ("UserId", "FirstName", "LastName", "Email", "Role", "isActive", "SoftDelete")
+      VALUES ('${testUserId}', 'DocTest', 'User', 'auth_user_docs@roverledger.com', 'User', true, false)
+      ON CONFLICT ("UserId") DO NOTHING;
+    `);
+
     // 0. Validation Testing: Upload without authtoken (must be rejected 401)
     console.log('0️⃣ Testing Upload Validation (Unauthenticated upload requires token)...');
     const unauthUploadRes = await makeMultipartRequest('/documents/upload', {
@@ -169,8 +176,8 @@ async function runDocumentTests() {
     }
     console.log('   ✅ Correctly rejected invalid documentType (400).\n');
 
-    // 2.1 Testing Upload Document without documentType (optional field test)
-    console.log('2️⃣.1️⃣ Testing Upload Document without documentType (documentType is optional)...');
+    // 2.1 Testing Upload Document without documentType (mandatory validation: must reject 400)
+    console.log('2️⃣.1️⃣ Testing Upload Document without documentType (mandatory field rejection test)...');
     const docNoTypeContent = Buffer.from('%PDF-1.4 GENERAL MEMO: Rover Ledger Quarterly Planning');
     const uploadResNoType = await makeMultipartRequest('/documents/upload', {
       documentName: 'Quarterly Planning Memo',
@@ -184,18 +191,12 @@ async function runDocumentTests() {
     }, testUserToken);
 
     console.log('   Upload (without documentType) Response:', uploadResNoType.data);
-    if (uploadResNoType.status !== 201 || !uploadResNoType.data.success) {
-      throw new Error(`Upload without documentType failed with status ${uploadResNoType.status}`);
+    if (uploadResNoType.status !== 400 || uploadResNoType.data.success !== false) {
+      throw new Error(`Expected 400 Bad Request when documentType is omitted, got status ${uploadResNoType.status}`);
     }
+    console.log('   ✅ Correctly rejected upload when documentType is omitted (400 Bad Request)!\n');
 
-    const docNoType = uploadResNoType.data.data;
-    uploadedOneDriveItemIds.push(docNoType.oneDriveItemId);
-    if (docNoType.documentType !== null) {
-      throw new Error(`Expected documentType to be null when omitted, got '${docNoType.documentType}'`);
-    }
-    console.log('   ✅ Document uploaded successfully without documentType (documentType = null)!\n');
-
-    // 2.2 Testing Upload Document with documentType: 'null' (explicit null value)
+    // 2.2 Testing Upload Document with documentType: 'null' (explicit null must reject 400)
     console.log('2️⃣.2️⃣ Testing Upload Document with documentType: "null"...');
     const docNullTypeContent = Buffer.from('%PDF-1.4 GENERAL MEMO: Rover Ledger Explicit Null Document Type');
     const uploadResNullType = await makeMultipartRequest('/documents/upload', {
@@ -210,18 +211,12 @@ async function runDocumentTests() {
     }, testUserToken);
 
     console.log('   Upload (with documentType: "null") Response:', uploadResNullType.data);
-    if (uploadResNullType.status !== 201 || !uploadResNullType.data.success) {
-      throw new Error(`Upload with documentType: "null" failed with status ${uploadResNullType.status}`);
+    if (uploadResNullType.status !== 400 || uploadResNullType.data.success !== false) {
+      throw new Error(`Expected 400 Bad Request when documentType is 'null', got status ${uploadResNullType.status}`);
     }
+    console.log('   ✅ Correctly rejected upload with documentType "null" (400 Bad Request)!\n');
 
-    const docNullType = uploadResNullType.data.data;
-    uploadedOneDriveItemIds.push(docNullType.oneDriveItemId);
-    if (docNullType.documentType !== null) {
-      throw new Error(`Expected documentType to be null when 'null' is provided, got '${docNullType.documentType}'`);
-    }
-    console.log('   ✅ Document uploaded successfully with documentType: "null" (stored as null)!\n');
-
-    // 2.3 Testing Upload Document with documentType: 'undefined' (common FormData stringification from FE)
+    // 2.3 Testing Upload Document with documentType: 'undefined' (explicit undefined string must reject 400)
     console.log('2️⃣.3️⃣ Testing Upload Document with documentType: "undefined"...');
     const docUndefinedTypeContent = Buffer.from('%PDF-1.4 GENERAL MEMO: Rover Ledger FormData undefined string test');
     const uploadResUndefinedType = await makeMultipartRequest('/documents/upload', {
@@ -236,23 +231,42 @@ async function runDocumentTests() {
     }, testUserToken);
 
     console.log('   Upload (with documentType: "undefined") Response:', uploadResUndefinedType.data);
-    if (uploadResUndefinedType.status !== 201 || !uploadResUndefinedType.data.success) {
-      throw new Error(`Upload with documentType: "undefined" failed with status ${uploadResUndefinedType.status}`);
+    if (uploadResUndefinedType.status !== 400 || uploadResUndefinedType.data.success !== false) {
+      throw new Error(`Expected 400 Bad Request when documentType is 'undefined', got status ${uploadResUndefinedType.status}`);
     }
+    console.log('   ✅ Correctly rejected upload with documentType "undefined" (400 Bad Request)!\n');
 
-    const docUndefinedType = uploadResUndefinedType.data.data;
-    uploadedOneDriveItemIds.push(docUndefinedType.oneDriveItemId);
-    if (docUndefinedType.documentType !== null) {
-      throw new Error(`Expected documentType to be null when 'undefined' is provided, got '${docUndefinedType.documentType}'`);
+    // 2.4 Testing Upload Document with documentType: 'Combined'
+    console.log('2️⃣.4️⃣ Testing Upload Document with documentType: "Combined"...');
+    const docCombinedContent = Buffer.from('%PDF-1.4 MULTI-PAGE STATEMENT: Rover Ledger Combined Income & Expense Report');
+    const uploadResCombined = await makeMultipartRequest('/documents/upload', {
+      documentName: 'Combined Annual Financial Statement',
+      documentType: 'Combined',
+      documentDate: '2026-06-04',
+    }, {
+      fieldname: 'file',
+      filename: 'annual_combined.pdf',
+      mimetype: 'application/pdf',
+      content: docCombinedContent,
+    }, testUserToken);
+
+    console.log('   Upload (with documentType: "Combined") Response:', uploadResCombined.data);
+    if (uploadResCombined.status !== 201 || !uploadResCombined.data.success) {
+      throw new Error(`Upload with documentType: "Combined" failed with status ${uploadResCombined.status}`);
     }
-    console.log('   ✅ Document uploaded successfully with documentType: "undefined" (safely handled and stored as null)!\n');
+    const docCombined = uploadResCombined.data.data;
+    uploadedOneDriveItemIds.push(docCombined.oneDriveItemId);
+    if (docCombined.documentType !== 'Combined') {
+      throw new Error(`Expected documentType 'Combined', got '${docCombined.documentType}'`);
+    }
+    console.log('   ✅ Document uploaded successfully with documentType: "Combined"!\n');
 
     // 3. Upload Document 1: Income Document
-    console.log('3️⃣ Testing Upload Document 1 (documentType: income, synced to Microsoft OneDrive)...');
+    console.log('3️⃣ Testing Upload Document 1 (documentType: Income, synced to Microsoft OneDrive)...');
     const doc1Content = Buffer.from('%PDF-1.4 INVOICE #1001: Rover Ledger Consulting Services - Paid $5,000');
     const uploadRes1 = await makeMultipartRequest('/documents/upload', {
       documentName: 'Consulting Income Invoice April 2026',
-      documentType: 'income',
+      documentType: 'Income',
       documentDate: '2026-04-10',
     }, {
       fieldname: 'file',
@@ -281,17 +295,17 @@ async function runDocumentTests() {
       }
     }
 
-    if (doc1.documentType !== 'income') throw new Error(`Expected documentType 'income', got '${doc1.documentType}'`);
+    if (doc1.documentType !== 'Income') throw new Error(`Expected documentType 'Income', got '${doc1.documentType}'`);
     if (doc1.pdfCreated !== undefined) throw new Error(`pdfCreated should not be present in document response, got ${doc1.pdfCreated}`);
     if (doc1.softDelete !== false) throw new Error(`Expected softDelete false, got ${doc1.softDelete}`);
     console.log('   ✅ Document 1 successfully stored in Rover Ledger DB and synced to Microsoft OneDrive!\n');
 
-    // 4. Upload Document 2: expense Document (testing 'expense' type and image upload)
-    console.log('4️⃣ Testing Upload Document 2 (documentType: expense, image upload)...');
+    // 4. Upload Document 2: Expense Document (testing 'Expense' type and image upload)
+    console.log('4️⃣ Testing Upload Document 2 (documentType: Expense, image upload)...');
     const doc2Content = Buffer.from('RECEIPT: Office Supplies & Equipment - $450');
     const uploadRes2 = await makeMultipartRequest('/documents/upload', {
       documentName: 'Office Rent & Utilities expense',
-      documentType: 'expense',
+      documentType: 'Expense',
       documentDate: '2026-05-01',
     }, {
       fieldname: 'image',
@@ -308,7 +322,7 @@ async function runDocumentTests() {
     const doc2 = uploadRes2.data.data;
     uploadedOneDriveItemIds.push(doc2.oneDriveItemId);
 
-    if (doc2.documentType !== 'expense') throw new Error(`Expected documentType 'expense', got '${doc2.documentType}'`);
+    if (doc2.documentType !== 'Expense') throw new Error(`Expected documentType 'Expense', got '${doc2.documentType}'`);
     if (doc2.pdfCreated !== undefined) throw new Error(`pdfCreated should not be present in document response, got ${doc2.pdfCreated}`);
     console.log('   ✅ Document 2 (expense image) uploaded and saved successfully!\n');
 
@@ -318,7 +332,7 @@ async function runDocumentTests() {
     const doc3Content = Buffer.from('BILL: Software Licenses expense - $1,200');
     const uploadRes3 = await makeMultipartRequest('/documents/upload', {
       documentName: 'Software Cloud Licenses expense',
-      documentType: 'expense',
+      documentType: 'Expense',
       documentDate: '2026-05-15',
     }, {
       fieldname: 'file',
@@ -389,37 +403,37 @@ async function runDocumentTests() {
       throw new Error('Failed to fetch counts for authenticated user');
     }
 
-    const { total, incomeInvoiceCount, expenseInvoiceCount, pdfCount } = userCountsRes.data.data;
-    if (total === undefined || incomeInvoiceCount === undefined || expenseInvoiceCount === undefined || pdfCount === undefined) {
-      throw new Error('All 4 counts (total, incomeInvoiceCount, expenseInvoiceCount, pdfCount) must be present in GET /documents/counts');
+    const { total, incomeInvoiceCount, expenseInvoiceCount, combinedInvoiceCount, pdfCount } = userCountsRes.data.data;
+    if (total === undefined || incomeInvoiceCount === undefined || expenseInvoiceCount === undefined || combinedInvoiceCount === undefined || pdfCount === undefined) {
+      throw new Error('All 5 counts (total, incomeInvoiceCount, expenseInvoiceCount, combinedInvoiceCount, pdfCount) must be present in GET /documents/counts');
     }
 
-    // Document 3 was uploaded with testUserToken as 'expense'
-    if (total < 1 || expenseInvoiceCount < 1) {
-      throw new Error('Expected total >= 1 and expenseInvoiceCount >= 1 for testUser');
+    // Document 3 was uploaded with testUserToken as 'Expense' and docCombined with 'Combined'
+    if (total < 1 || expenseInvoiceCount < 1 || combinedInvoiceCount < 1) {
+      throw new Error('Expected total >= 1, expenseInvoiceCount >= 1, and combinedInvoiceCount >= 1 for testUser');
     }
 
-    console.log('   ✅ Document Counts API (GET /documents/counts) correctly returned all 4 counts strictly for authenticated user!\n');
+    console.log('   ✅ Document Counts API (GET /documents/counts) correctly returned all 5 counts strictly for authenticated user!\n');
 
     // 8. Filter Documents: Must contain only req body not query
     console.log('8️⃣ Testing Filter Documents using ONLY req.body (POST /documents/filter)...');
 
-    // Filter by documentType: income (in req.body)
+    // Filter by documentType: Income (in req.body)
     const filterIncomeBodyRes = await makeJsonRequest('/documents/filter', 'POST', {
-      documentType: 'income',
+      documentType: 'Income',
     });
-    console.log(`   POST /documents/filter with body { documentType: 'income' } returned: ${filterIncomeBodyRes.data.data.total} records`);
+    console.log(`   POST /documents/filter with body { documentType: 'Income' } returned: ${filterIncomeBodyRes.data.data.total} records`);
     for (const row of filterIncomeBodyRes.data.data.rows) {
-      if (row.documentType !== 'income') throw new Error(`Filter leaked non-income document: ${row.documentType}`);
+      if (row.documentType && row.documentType.toLowerCase() !== 'income') throw new Error(`Filter leaked non-income document: ${row.documentType}`);
     }
 
     // Verify req.body takes precedence and query string is ignored
-    const filterQueryIgnoredRes = await makeJsonRequest('/documents/filter?documentType=income', 'POST', {
-      documentType: 'expense',
+    const filterQueryIgnoredRes = await makeJsonRequest('/documents/filter?documentType=Income', 'POST', {
+      documentType: 'Expense',
     });
-    console.log(`   Query parameter ignored check: URL had documentType=income but body had documentType=expense`);
+    console.log(`   Query parameter ignored check: URL had documentType=Income but body had documentType=Expense`);
     for (const row of filterQueryIgnoredRes.data.data.rows) {
-      if (row.documentType !== 'expense') {
+      if (row.documentType && row.documentType.toLowerCase() !== 'expense') {
         throw new Error(`BUG: Filter used query string instead of req.body! Found type: ${row.documentType}`);
       }
     }
@@ -428,7 +442,7 @@ async function runDocumentTests() {
     // 9. Filter Documents based on authtoken
     console.log('9️⃣ Testing Filter Documents based on authtoken (POST /documents/filter with authtoken)...');
     const userFilterRes = await makeJsonRequest('/documents/filter', 'POST', {
-      documentType: 'expense',
+      documentType: 'Expense',
     }, testUserToken);
 
     console.log(`   User authtoken filter returned: ${userFilterRes.data.data.total} records`);
@@ -514,6 +528,13 @@ async function runDocumentTests() {
     console.error('❌ Test failed with error:', error);
     process.exitCode = 1;
   } finally {
+    // Clean up test user (will also CASCADE clean up any DB documents)
+    try {
+      await pool.query(`DELETE FROM "Rover_ledgers" WHERE "UserId" = '${testUserId}';`);
+    } catch (cleanUserErr) {
+      console.warn('   Could not clean up test user:', cleanUserErr.message);
+    }
+
     // Clean up uploaded test files from Microsoft OneDrive
     console.log('🧹 Cleaning up uploaded test files from Microsoft OneDrive...');
     for (const itemId of uploadedOneDriveItemIds) {

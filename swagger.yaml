@@ -419,6 +419,7 @@ paths:
                 - file
                 - documentName
                 - documentDate
+                - documentType
               properties:
                 file:
                   type: string
@@ -430,10 +431,9 @@ paths:
                   example: April 2026 Office Rent Invoice
                 documentType:
                   type: string
-                  nullable: true
-                  enum: [income, expense]
-                  description: Optional document type ('income', 'expense', or null)
-                  example: expense
+                  enum: [Income, Expense, Combined]
+                  description: Document type ('Income', 'Expense', or 'Combined'). Required.
+                  example: Expense
                 documentDate:
                   type: string
                   format: date
@@ -469,7 +469,8 @@ paths:
         1. **total**: Total active documents uploaded by the user
         2. **incomeInvoiceCount**: Total active income invoices for this user
         3. **expenseInvoiceCount**: Total active expense invoices for this user
-        4. **pdfCount**: Total active documents with PDF created (PDF files)
+        4. **combinedInvoiceCount**: Total active combined invoices for this user
+        5. **pdfCount**: Total active documents with PDF created (PDF files)
       operationId: getDocumentCounts
       security:
         - bearerAuth: []
@@ -563,9 +564,9 @@ paths:
                 documentType:
                   type: string
                   nullable: true
-                  enum: [income, expense]
-                  description: Filter by document type ('income', 'expense', or 'null' for unclassified)
-                  example: expense
+                  enum: [Income, Expense, Combined]
+                  description: Filter by document type ('Income', 'Expense', 'Combined', or 'null' for legacy unclassified)
+                  example: Expense
                 documentName:
                   type: string
                   description: Partial document name filter
@@ -588,6 +589,16 @@ paths:
                   type: string
                   description: Global search term matching documentName or originalFileName
                   example: invoice
+                uploadedBy:
+                  description: Optional filter by uploader User ID (UUID string or array of UUIDs; Admin only)
+                  oneOf:
+                    - type: string
+                      format: uuid
+                      example: 50b020ef-8ff6-4c2c-85c3-0b9c412a266a
+                    - type: array
+                      items:
+                        type: string
+                        format: uuid
                 fileType:
                   type: string
                   description: MIME type filter (e.g. image, pdf)
@@ -1177,9 +1188,9 @@ components:
         documentType:
           type: string
           nullable: true
-          enum: [income, expense]
-          description: Document type ('income', 'expense', or null)
-          example: expense
+          enum: [Income, Expense, Combined]
+          description: Document type ('Income', 'Expense', or 'Combined')
+          example: Expense
         fileSize:
           type: integer
           description: Size in bytes
@@ -1227,6 +1238,29 @@ components:
           format: uuid
           nullable: true
           description: User ID who uploaded the file
+        uploadedByUser:
+          type: object
+          nullable: true
+          description: Profile details of the user who uploaded the document
+          properties:
+            userId:
+              type: string
+              format: uuid
+              example: 50b020ef-8ff6-4c2c-85c3-0b9c412a266a
+            fullName:
+              type: string
+              example: John Doe
+            email:
+              type: string
+              format: email
+              example: john.doe@company.com
+            role:
+              type: string
+              example: User
+            designation:
+              type: string
+              nullable: true
+              example: Senior Accountant
         isSharedWithCa:
           type: boolean
           description: Whether document is shared with CA in Google Drive
@@ -1293,6 +1327,9 @@ components:
             expenseInvoiceCount:
               type: integer
               example: 18
+            combinedInvoiceCount:
+              type: integer
+              example: 6
             pdfCount:
               type: integer
               example: 15
@@ -1323,6 +1360,15 @@ components:
             totalPages:
               type: integer
               example: 1
+            incomeInvoiceCount:
+              type: integer
+              example: 24
+            expenseInvoiceCount:
+              type: integer
+              example: 18
+            combinedInvoiceCount:
+              type: integer
+              example: 6
 
     # Bulk Delete Request
     BulkDeleteRequest:

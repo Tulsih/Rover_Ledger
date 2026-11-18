@@ -419,7 +419,7 @@ flowchart LR
 | :--- | :--- | :---: | :--- |
 | `file` | File Binary | ✅ Yes | The document or image file (accepts field name `file`, `document`, or `image`) |
 | `documentName` | String | ✅ Yes | Custom display name (e.g. `"Office Rent Invoice Oct 2026"`) |
-| `documentType` | String | ❌ No (Optional) | Allowed values: `'income'`, `'expense'`, or `null` (`DocumentType` enum) |
+| `documentType` | String | ✅ Yes | Required document type. Allowed values: `'Income'`, `'Expense'`, or `'Combined'` (case-insensitive on submission, returned as canonical title-case) |
 | `documentDate` | String (Date) | ✅ Yes | Format: `YYYY-MM-DD` (e.g. `"2026-10-29"`) |
 
 #### Frontend Code Example (JavaScript / React):
@@ -427,7 +427,7 @@ flowchart LR
 const formData = new FormData();
 formData.append('file', fileInput.files[0]);
 formData.append('documentName', 'Server Cloud Hosting');
-formData.append('documentType', 'expense');
+formData.append('documentType', 'Expense');
 formData.append('documentDate', '2026-10-29');
 
 const response = await api.post('/documents/upload', formData, {
@@ -443,7 +443,7 @@ const response = await api.post('/documents/upload', formData, {
   "data": {
     "id": "7f8b9c2a-1123-4455-8899-aabbccddeeff",
     "documentName": "Server Cloud Hosting",
-    "documentType": "expense",
+    "documentType": "Expense",
     "fileSize": 1048576,
     "fileType": "application/pdf",
     "documentDate": "2026-10-29T00:00:00.000Z",
@@ -464,11 +464,12 @@ const response = await api.post('/documents/upload', formData, {
 ### Fetch Document Counts & Statistics API (NEW)
 - **Endpoint**: `GET /documents/counts` (or `GET /documents/count`)
 - **Headers**: `Authorization: Bearer <accessToken>` (Required)
-- **Description**: Returns all 4 aggregate counts strictly for the authenticated user based on their Bearer token:
+- **Description**: Returns all aggregate counts strictly for the authenticated user based on their Bearer token:
   1. `total`: Total active documents uploaded by the user
   2. `incomeInvoiceCount`: Total active income invoices for this user
   3. `expenseInvoiceCount`: Total active expense invoices for this user
-  4. `pdfCount`: Total active PDF documents
+  4. `combinedInvoiceCount`: Total active combined invoices for this user
+  5. `pdfCount`: Total active PDF documents
 
 #### Response Structure (`200 OK`):
 ```json
@@ -479,6 +480,7 @@ const response = await api.post('/documents/upload', formData, {
     "total": 42,
     "incomeInvoiceCount": 24,
     "expenseInvoiceCount": 18,
+    "combinedInvoiceCount": 6,
     "pdfCount": 15
   }
 }
@@ -549,9 +551,19 @@ const response = await api.post('/documents/upload', formData, {
 ```
 > 💡 **New Filter Property (`isSharedWithCa`)**: Pass `true` to fetch only invoices shared with the CA in Google Drive, or `false` to fetch only unshared invoices. Omit or pass `undefined` to fetch both.
 
-> 🛡️ **Role Scoping in Filter**:
+> 🛡️ **Role Scoping in Filter & Uploader Identity**:
 > - If authenticated as **`Role: User`**: The search is automatically restricted to documents uploaded by this user (`uploadedBy = user.UserId`).
-> - If authenticated as **`Role: Admin`**: The search operates across **all active documents** in the platform. Admins can optionally pass `"uploadedBy": "<userId>"` in the body if they want to filter for a particular employee.
+> - If authenticated as **`Role: Admin`**: The search operates across **all active documents** in the platform. Admins can optionally pass `"uploadedBy": "<userId>"` (single UUID) or an array `["<userId1>", "<userId2>"]` to filter for specific employees.
+> - **`uploadedByUser` Object (NEW)**: Each document in the response now includes the uploader's identity details:
+>   ```json
+>   "uploadedByUser": {
+>     "userId": "50b020ef-8ff6-4c2c-85c3-0b9c412a266a",
+>     "fullName": "John Doe",
+>     "email": "john.doe@company.com",
+>     "role": "User",
+>     "designation": "Senior Accountant"
+>   }
+>   ```
 >
 > ⚠️ **Key Rule**: As per backend specification, the filter criteria are provided in the **request body**, not as query parameters.
 
@@ -672,7 +684,7 @@ Rover Ledger permanently removes the physical file from **Microsoft OneDrive** t
 | :--- | :--- | :--- |
 | `id` | UUID (PK) | Auto-generated unique document ID |
 | `documentName` | Varchar(255) | Name given to the document |
-| `documentType` | Varchar(50) | Allowed values: `'income'`, `'expense'`, or `null` |
+| `documentType` | Varchar(50) | Allowed values: `'Income'`, `'Expense'`, or `'Combined'` |
 | `fileSize` | Bigint | Size of file in bytes |
 | `fileType` | Varchar(100) | MIME type (e.g. `application/pdf`, `image/jpeg`) |
 | `documentDate` | Timestamp | Date of financial record |
@@ -725,7 +737,7 @@ The backend includes a live Swagger UI:
   - For rapid UI prototyping: Call `POST /auth/microsoft` with `{"code": "dummy_code"}`.
   - For production: Integrate `@azure/msal-browser` and pass the obtained `accessToken` to `POST /auth/microsoft`.
 - [ ] **Store JWT Token**: Store `data.token` securely in storage and attach to the `Authorization: Bearer <token>` header.
-- [ ] **File Upload**: Use `FormData` with field `file`, `documentName`, `documentDate` (`YYYY-MM-DD`), and optional `documentType` (`'income'`, `'expense'`, or `null`).
+- [ ] **File Upload**: Use `FormData` with field `file`, `documentName`, `documentDate` (`YYYY-MM-DD`), and mandatory `documentType` (`'Income'`, `'Expense'`, or `'Combined'`).
 - [ ] **File Preview / Download**: Use `/documents/:id/download?inline=true` directly inside `<img src="...">` or PDF viewers.
 - [ ] **Bulk Deletion**: Pass `{ "ids": ["id1", "id2"] }` to `DELETE /documents/bulk`.
 

@@ -1,6 +1,6 @@
 const { eq, and, or, ilike, gte, lte, desc, asc, sql, inArray, isNull } = require('drizzle-orm');
 const { db } = require('../db');
-const { DocumentDetails } = require('../models');
+const { DocumentDetails, RoverLedgers } = require('../models');
 const documentCaShareRepository = require('./documentCaShare.repository');
 const { DocumentType } = require('../enums');
 
@@ -59,6 +59,62 @@ class DocumentRepository {
   }
 
   /**
+   * Helper to batch enrich document rows with uploader details from Rover_ledgers
+   * @param {Array} rows
+   * @returns {Promise<Array>}
+   */
+  async _enrichDocumentsWithUsers(rows) {
+    if (!rows || rows.length === 0) return [];
+
+    const userIds = [...new Set(rows.map((r) => r.uploadedBy).filter(Boolean))];
+    if (userIds.length === 0) {
+      return rows.map((doc) => ({
+        ...doc,
+        uploadedByUser: null,
+      }));
+    }
+
+    try {
+      const users = await db
+        .select({
+          UserId: RoverLedgers.UserId,
+          FullName: RoverLedgers.FullName,
+          FirstName: RoverLedgers.FirstName,
+          LastName: RoverLedgers.LastName,
+          Email: RoverLedgers.Email,
+          Designation: RoverLedgers.Designation,
+          Role: RoverLedgers.Role,
+        })
+        .from(RoverLedgers)
+        .where(inArray(RoverLedgers.UserId, userIds));
+
+      const userMap = new Map(users.map((u) => [u.UserId, u]));
+
+      return rows.map((doc) => {
+        const uploader = doc.uploadedBy ? userMap.get(doc.uploadedBy) : null;
+        return {
+          ...doc,
+          uploadedByUser: uploader
+            ? {
+                userId: uploader.UserId,
+                fullName: uploader.FullName || `${uploader.FirstName || ''} ${uploader.LastName || ''}`.trim() || null,
+                email: uploader.Email,
+                role: uploader.Role,
+                designation: uploader.Designation || null,
+              }
+            : null,
+        };
+      });
+    } catch (err) {
+      console.error('[DocumentRepository._enrichDocumentsWithUsers Error]:', err.message);
+      return rows.map((doc) => ({
+        ...doc,
+        uploadedByUser: null,
+      }));
+    }
+  }
+
+  /**
    * Insert a new document record into `document_details` table
    * @param {object} data
    * @returns {Promise<object>} Created document record
@@ -83,7 +139,9 @@ class DocumentRepository {
       })
       .returning();
 
-    return this._enrichDocument(result[0]);
+    const enriched = this._enrichDocument(result[0]);
+    const withUsers = await this._enrichDocumentsWithUsers([enriched]);
+    return withUsers[0];
   }
 
   /**
@@ -113,7 +171,9 @@ class DocumentRepository {
       // Graceful fallback if table not yet populated or error occurs
     }
 
-    return this._enrichDocument(result[0], caShare);
+    const enriched = this._enrichDocument(result[0], caShare);
+    const withUsers = await this._enrichDocumentsWithUsers([enriched]);
+    return withUsers[0] || null;
   }
 
   /**
@@ -172,9 +232,25 @@ class DocumentRepository {
       conditions.push(ilike(DocumentDetails.fileType, `%${filters.fileType.trim()}%`));
     }
 
-    // Filter by user ID if provided
+    // Filter by user ID if provided (supports single UUID, comma-separated UUIDs, or array of UUIDs)
     if (filters.uploadedBy) {
-      conditions.push(eq(DocumentDetails.uploadedBy, filters.uploadedBy));
+      if (Array.isArray(filters.uploadedBy)) {
+        const validIds = filters.uploadedBy.map((id) => String(id).trim()).filter(Boolean);
+        if (validIds.length === 1) {
+          conditions.push(eq(DocumentDetails.uploadedBy, validIds[0]));
+        } else if (validIds.length > 1) {
+          conditions.push(inArray(DocumentDetails.uploadedBy, validIds));
+        }
+      } else if (typeof filters.uploadedBy === 'string' && filters.uploadedBy.includes(',')) {
+        const splitIds = filters.uploadedBy.split(',').map((id) => id.trim()).filter(Boolean);
+        if (splitIds.length === 1) {
+          conditions.push(eq(DocumentDetails.uploadedBy, splitIds[0]));
+        } else if (splitIds.length > 1) {
+          conditions.push(inArray(DocumentDetails.uploadedBy, splitIds));
+        }
+      } else {
+        conditions.push(eq(DocumentDetails.uploadedBy, filters.uploadedBy));
+      }
     }
 
     // Filter by isSharedWithCa (boolean: true or false)
@@ -221,7 +297,8 @@ class DocumentRepository {
     }
 
     const rows = await query;
-    const enrichedRows = await this._enrichDocumentsWithShares(rows);
+    const enrichedWithShares = await this._enrichDocumentsWithShares(rows);
+    const enrichedRows = await this._enrichDocumentsWithUsers(enrichedWithShares);
 
     const response = { rows: enrichedRows };
 
@@ -255,8 +332,9 @@ class DocumentRepository {
     const statsResult = await db
       .select({
         total: sql`count(*)::int`,
-        incomeInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.INCOME})::int`,
-        expenseInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.EXPENSE})::int`,
+        incomeInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.INCOME.toLowerCase()})::int`,
+        expenseInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.EXPENSE.toLowerCase()})::int`,
+        combinedInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.COMBINED.toLowerCase()})::int`,
         pdfCount: sql`count(*) filter (where lower(${DocumentDetails.fileType}) like '%pdf%' or lower(${DocumentDetails.originalFileName}) like '%.pdf')::int`,
       })
       .from(DocumentDetails)
@@ -265,21 +343,17 @@ class DocumentRepository {
     const total = parseInt(statsResult[0]?.total || '0', 10);
     const incomeInvoiceCount = parseInt(statsResult[0]?.incomeInvoiceCount || '0', 10);
     const expenseInvoiceCount = parseInt(statsResult[0]?.expenseInvoiceCount || '0', 10);
+    const combinedInvoiceCount = parseInt(statsResult[0]?.combinedInvoiceCount || '0', 10);
     const pdfCount = parseInt(statsResult[0]?.pdfCount || '0', 10);
 
     return {
       total,
       incomeInvoiceCount,
       expenseInvoiceCount,
+      combinedInvoiceCount,
       pdfCount,
     };
   }
-
-  /**
-   * Find documents with filters, pagination, and sorting
-   * @param {object} options
-   * @returns {Promise<{ rows: Array, total: number, page: number, limit: number, totalPages: number, incomeInvoiceCount: number, expenseInvoiceCount: number }>}
-   */
   async findWithFilters(options = {}) {
     const page = Math.max(1, parseInt(options.page || '1', 10));
     const limit = Math.min(100, Math.max(1, parseInt(options.limit || '10', 10)));
@@ -300,15 +374,17 @@ class DocumentRepository {
       db
         .select({
           total: sql`count(*)::int`,
-          incomeInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.INCOME})::int`,
-          expenseInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.EXPENSE})::int`,
+          incomeInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.INCOME.toLowerCase()})::int`,
+          expenseInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.EXPENSE.toLowerCase()})::int`,
+          combinedInvoiceCount: sql`count(*) filter (where lower(${DocumentDetails.documentType}) = ${DocumentType.COMBINED.toLowerCase()})::int`,
         })
         .from(DocumentDetails)
         .where(whereClause),
     ]);
 
     const total = parseInt(countResult[0]?.total || '0', 10);
-    const enrichedRows = await this._enrichDocumentsWithShares(rows);
+    const enrichedWithShares = await this._enrichDocumentsWithShares(rows);
+    const enrichedRows = await this._enrichDocumentsWithUsers(enrichedWithShares);
 
     return {
       rows: enrichedRows,
@@ -318,15 +394,9 @@ class DocumentRepository {
       totalPages: Math.ceil(total / limit) || 1,
       incomeInvoiceCount: parseInt(countResult[0]?.incomeInvoiceCount || '0', 10),
       expenseInvoiceCount: parseInt(countResult[0]?.expenseInvoiceCount || '0', 10),
+      combinedInvoiceCount: parseInt(countResult[0]?.combinedInvoiceCount || '0', 10),
     };
   }
-
-  /**
-   * Update document details by ID
-   * @param {string} id - UUID
-   * @param {object} updateData
-   * @returns {Promise<object|null>}
-   */
   async updateDocument(id, updateData) {
     const dataToUpdate = {
       ...updateData,
@@ -346,12 +416,6 @@ class DocumentRepository {
 
     return result[0] || null;
   }
-
-  /**
-   * Soft delete document by setting softDelete = true
-   * @param {string} id - UUID
-   * @returns {Promise<object|null>}
-   */
   async softDelete(id) {
     const result = await db
       .update(DocumentDetails)
@@ -370,12 +434,6 @@ class DocumentRepository {
     return this._enrichDocument(result[0]) || null;
   }
 
-  /**
-   * Bulk soft delete documents
-   * @param {string[]} ids
-   * @param {string|null} userId
-   * @returns {Promise<Array>}
-   */
   async bulkSoftDelete(ids, userId = null) {
     if (!ids || ids.length === 0) {
       return [];
@@ -406,13 +464,6 @@ class DocumentRepository {
 
     return result.map((r) => this._enrichDocument(r));
   }
-
-  /**
-   * Fetch all documents uploaded by a specific user (including soft-deleted)
-   * Used for cascading cleanup to delete physical files from Microsoft OneDrive
-   * @param {string} userId
-   * @returns {Promise<Array>}
-   */
   async findAllByUploadedBy(userId) {
     if (!userId) return [];
     const results = await db
@@ -422,12 +473,6 @@ class DocumentRepository {
     return results.map((r) => this._enrichDocument(r));
   }
 
-  /**
-   * Permanently hard-delete all document records uploaded by a user
-   * @param {string} userId
-   * @param {object|null} tx - Optional transaction handle
-   * @returns {Promise<number>} Count of deleted document rows
-   */
   async deleteByUploadedBy(userId, tx = null) {
     if (!userId) return 0;
     const executor = tx || db;

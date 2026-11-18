@@ -17,21 +17,42 @@ const UUID_REGEX =
  */
 class DocumentService {
   /**
-   * Helper to validate and normalize documentType ('income', 'expense', or null)
+   * Helper to validate and normalize documentType ('Income', 'Expense', or 'Combined')
+   * Null, undefined, empty, or unlisted values are strictly rejected with 400 Bad Request.
    */
   _parseDocumentType(type) {
-    if (type === undefined || type === null || type === '') return null;
-    if (typeof type !== 'string') {
-      const err = new Error(`Invalid document type. Allowed values are '${DocumentType.INCOME}', '${DocumentType.EXPENSE}', or null.`);
+    if (type === undefined || type === null || type === '') {
+      const err = new Error(
+        `Document type is required. Allowed values are '${DocumentType.INCOME}', '${DocumentType.EXPENSE}', or '${DocumentType.COMBINED}'.`
+      );
       err.statusCode = 400;
       throw err;
     }
-    const normalized = type.trim().toLowerCase();
-    if (['null', 'none', 'undefined', ''].includes(normalized)) return null;
-    if (normalized === DocumentType.INCOME) return DocumentType.INCOME;
-    if (normalized === DocumentType.EXPENSE || normalized === 'expence') return DocumentType.EXPENSE;
 
-    const err = new Error(`Invalid document type '${type}'. Allowed values are '${DocumentType.INCOME}', '${DocumentType.EXPENSE}', or null.`);
+    if (typeof type !== 'string') {
+      const err = new Error(
+        `Invalid document type. Allowed values are '${DocumentType.INCOME}', '${DocumentType.EXPENSE}', or '${DocumentType.COMBINED}'.`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const normalized = type.trim().toLowerCase();
+    if (['null', 'none', 'undefined', ''].includes(normalized)) {
+      const err = new Error(
+        `Document type cannot be null or empty. Allowed values are '${DocumentType.INCOME}', '${DocumentType.EXPENSE}', or '${DocumentType.COMBINED}'.`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (normalized === 'income') return DocumentType.INCOME;
+    if (normalized === 'expense' || normalized === 'expence') return DocumentType.EXPENSE;
+    if (normalized === 'combined') return DocumentType.COMBINED;
+
+    const err = new Error(
+      `Invalid document type '${type}'. Allowed values are '${DocumentType.INCOME}', '${DocumentType.EXPENSE}', or '${DocumentType.COMBINED}'.`
+    );
     err.statusCode = 400;
     throw err;
   }
