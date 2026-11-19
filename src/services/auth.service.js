@@ -16,7 +16,7 @@ const {
 } = require('../utils/microsoft.util');
 const { env } = require('../configs/env');
 const { isMockAuthCode, getMockUserProfile } = require('../utils/mockAuth.util');
-const { Role } = require('../enums');
+const { Role, determineUserRole } = require('../enums');
 
 /**
  * Authentication Service
@@ -89,6 +89,9 @@ class AuthService {
 
     const email = msProfile.email.toLowerCase();
 
+    // Determine user role dynamically based on email and configured admin list
+    const assignedRole = determineUserRole(email, env.adminEmails);
+
     // Step 3: Check if user already exists in Rover_ledgers table
     let user = await userRepository.findAnyByEmail(email);
 
@@ -104,6 +107,12 @@ class AuthService {
       const updatePayload = {
         isActive: true,
       };
+
+      // Automatically promote to Admin role if user email is recognized in company admin config
+      if (assignedRole === Role.ADMIN && user.Role !== Role.ADMIN) {
+        console.log(`👑 Auto-promoting user ${email} to ${Role.ADMIN} role on login`);
+        updatePayload.Role = Role.ADMIN;
+      }
 
       // Preserve existing profile details edited by user in Rover Ledger.
       // Only backfill missing/empty fields from Microsoft if not already set.
@@ -123,7 +132,7 @@ class AuthService {
         FullName: msProfile.fullName || null,
         Designation: msProfile.designation || null,
         Gender: msProfile.gender || null,
-        Role: Role.USER,
+        Role: assignedRole,
         isActive: true,
         SoftDelete: false,
       });

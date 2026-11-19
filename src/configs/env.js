@@ -35,6 +35,12 @@ const env = {
   // Testing & Development Mock Authentication
   enableMockLogin: process.env.ENABLE_MOCK_LOGIN === 'true' || (process.env.NODE_ENV !== 'production'),
 
+  // Designated company admin emails (comma-separated string in .env: ADMIN_EMAILS="email1,email2")
+  adminEmails: (process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
+
   // Google OAuth & Google Drive configuration
   googleClientId: process.env.GOOGLE_CLIENT_ID || process.env.GoogleClientId,
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || process.env.googleClientSecret,

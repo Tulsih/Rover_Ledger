@@ -6,7 +6,19 @@
  * Strictly gated behind `env.enableMockLogin` to prevent unauthorized access in production.
  */
 
-const MOCK_CODES = ['dummy_code', 'dummy', 'shraddha', 'shraddha_chauhan', 'test_code', 'demo'];
+const MOCK_CODES = [
+  'dummy_code',
+  'dummy',
+  'shraddha',
+  'shraddha_chauhan',
+  'test_code',
+  'demo',
+  'admin',
+  'admin_code',
+  'user',
+  'employee',
+  'regular_user',
+];
 
 /**
  * Check if the provided code matches a recognized development mock code
@@ -24,6 +36,30 @@ const isMockAuthCode = (code) => {
  * @returns {object} Mock profile
  */
 const getMockUserProfile = (code) => {
+  const normalized = (code || '').trim().toLowerCase();
+
+  if (normalized === 'admin' || normalized === 'admin_code') {
+    return {
+      firstName: 'Rover',
+      lastName: 'Admin',
+      fullName: 'Rover Ledger Admin',
+      email: 'admin@roverledger.com',
+      designation: 'System Administrator',
+      gender: 'Other',
+    };
+  }
+
+  if (normalized === 'user' || normalized === 'employee' || normalized === 'regular_user') {
+    return {
+      firstName: 'Standard',
+      lastName: 'Employee',
+      fullName: 'Standard Employee',
+      email: 'employee@roverledger.com',
+      designation: 'Staff Accountant',
+      gender: 'Other',
+    };
+  }
+
   return {
     firstName: 'Shraddha',
     lastName: 'Chauhan',

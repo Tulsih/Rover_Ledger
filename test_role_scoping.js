@@ -1,6 +1,15 @@
 const http = require('http');
 const app = require('./src/app');
-const { Role, ROLES, isValidRole, DocumentType, DOCUMENT_TYPES, isValidDocumentType } = require('./src/enums');
+const {
+  Role,
+  ROLES,
+  isValidRole,
+  DEFAULT_ADMIN_EMAILS,
+  determineUserRole,
+  DocumentType,
+  DOCUMENT_TYPES,
+  isValidDocumentType,
+} = require('./src/enums');
 const { generateAccessToken } = require('./src/utils/jwt.util');
 const userRepository = require('./src/repositories/user.repository');
 const documentRepository = require('./src/repositories/document.repository');
@@ -11,10 +20,7 @@ const { eq, inArray } = require('drizzle-orm');
 async function runRoleScopingTests() {
   console.log('🧪 Starting Role Enum & Scoping Test Suite...\n');
 
-  // ==========================================
-  // Test 1: Enum Verification
-  // ==========================================
-  console.log('1️⃣ Verifying Role & DocumentType Enums & Helpers...');
+  // Role Enum & Admin Helpers Verification
   if (Role.ADMIN !== 'Admin') throw new Error(`Role.ADMIN expected 'Admin', got '${Role.ADMIN}'`);
   if (Role.USER !== 'User') throw new Error(`Role.USER expected 'User', got '${Role.USER}'`);
   if (!ROLES.includes('Admin') || !ROLES.includes('User')) throw new Error('ROLES array missing Admin or User');
@@ -22,6 +28,13 @@ async function runRoleScopingTests() {
   if (!Object.isFrozen(Role)) throw new Error('Role enum object should be frozen');
   if (!isValidRole('Admin') || !isValidRole('User')) throw new Error('isValidRole failed on valid roles');
   if (isValidRole('Superadmin') || isValidRole('')) throw new Error('isValidRole failed on invalid roles');
+  if (!Array.isArray(DEFAULT_ADMIN_EMAILS) || !DEFAULT_ADMIN_EMAILS.includes('admin@roverledger.com')) {
+    throw new Error('DEFAULT_ADMIN_EMAILS should contain admin@roverledger.com');
+  }
+  if (determineUserRole('admin@roverledger.com') !== Role.ADMIN) throw new Error('determineUserRole failed on default admin');
+  if (determineUserRole('ADMIN@ROVERLEDGER.COM') !== Role.ADMIN) throw new Error('determineUserRole failed on uppercase admin');
+  if (determineUserRole('user@roverledger.com') !== Role.USER) throw new Error('determineUserRole failed on regular user');
+  if (determineUserRole('custom@company.com', ['custom@company.com']) !== Role.ADMIN) throw new Error('determineUserRole failed on custom admin');
 
   // DocumentType Enum Verification
   if (DocumentType.INCOME !== 'Income') throw new Error(`DocumentType.INCOME expected 'Income', got '${DocumentType.INCOME}'`);

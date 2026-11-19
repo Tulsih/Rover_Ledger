@@ -317,6 +317,42 @@ async function runTests() {
 
     console.log('   ✅ Permanent Cascading Account Deletion verified: User, documents, and tokens completely purged!\n');
 
+    // 10. Testing Automatic Role Assignment on Login (Admin vs User)
+    console.log('🔟 Testing Automatic Role Assignment on Login (Admin vs User)...');
+
+    const { determineUserRole, DEFAULT_ADMIN_EMAILS } = require('./src/enums');
+    if (determineUserRole('admin@roverledger.com') !== 'Admin') throw new Error('Expected admin@roverledger.com to be Admin');
+    if (determineUserRole('ADMIN@ROVERLEDGER.COM') !== 'Admin') throw new Error('Expected case-insensitive match for Admin');
+    if (determineUserRole('regular.user@roverledger.com') !== 'User') throw new Error('Expected regular.user to be User');
+    if (determineUserRole('custom.admin@roverledger.com', ['custom.admin@roverledger.com']) !== 'Admin') throw new Error('Expected custom admin email in list to be Admin');
+    if (determineUserRole('ceo@company.com', 'ceo@company.com, cto@company.com') !== 'Admin') throw new Error('Expected comma-separated env string to match Admin');
+
+    // Test Login via mock 'admin' code
+    const adminLoginRes = await makeRequest('/auth/microsoft', 'POST', { code: 'admin' });
+    if (adminLoginRes.status !== 200 || !adminLoginRes.data.success) {
+      throw new Error('Admin mock login failed');
+    }
+    const adminUser = adminLoginRes.data.data.user;
+    if (adminUser.Role !== 'Admin') {
+      throw new Error(`Expected admin user to have Role 'Admin', got '${adminUser.Role}'`);
+    }
+    console.log(`   ✅ Admin login assigned Role: '${adminUser.Role}' for email: ${adminUser.Email}`);
+
+    // Verify User login via mock 'user' code has Role: 'User'
+    const regularLoginRes = await makeRequest('/auth/microsoft', 'POST', { code: 'user' });
+    if (regularLoginRes.status !== 200 || !regularLoginRes.data.success) {
+      throw new Error('Regular mock login failed');
+    }
+    const regularUser = regularLoginRes.data.data.user;
+    if (regularUser.Role !== 'User') {
+      throw new Error(`Expected standard user to have Role 'User', got '${regularUser.Role}'`);
+    }
+    console.log(`   ✅ Standard login assigned Role: '${regularUser.Role}' for email: ${regularUser.Email}`);
+
+    // Clean up test mock users from database
+    await pool.query(`DELETE FROM "Rover_ledgers" WHERE "Email" IN ($1, $2)`, ['admin@roverledger.com', 'employee@roverledger.com']);
+    console.log('   ✅ Automatic role assignment verified successfully.\n');
+
     console.log('🎉 ALL TESTS PASSED SUCCESSFULLY! Everything is functioning properly.\n');
   } catch (err) {
     console.error('❌ Test failed:', err);
