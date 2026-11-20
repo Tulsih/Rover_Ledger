@@ -518,7 +518,7 @@ paths:
           required: false
           schema:
             type: integer
-            default: 10
+          description: Records per page. If omitted, defaults to the total count of stored documents matching the role/filter.
         - name: sortBy
           in: query
           required: false
@@ -1351,6 +1351,10 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/DocumentDetails'
+            total:
+              type: integer
+              description: Total count of active documents stored in DB matching role and filters
+              example: 42
             page:
               type: integer
               example: 1

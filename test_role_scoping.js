@@ -161,7 +161,13 @@ async function runRoleScopingTests() {
     const hasDocB = rowsA.some((d) => d.id === docB.id);
     if (!hasDocA) throw new Error('User A should see their own Doc A');
     if (hasDocB) throw new Error('User A must NOT see User B Doc B');
-    console.log('   ✅ GET /documents correctly scopes to User A only.');
+    if (resGetA.data.data.total !== 1) {
+      throw new Error(`Expected User A total to be 1, got ${resGetA.data.data.total}`);
+    }
+    if (resGetA.data.data.limit !== 1) {
+      throw new Error(`Expected default limit to equal total count (1), got ${resGetA.data.data.limit}`);
+    }
+    console.log(`   ✅ GET /documents correctly scopes to User A only with total count: ${resGetA.data.data.total} and default limit: ${resGetA.data.data.limit}.`);
 
     console.log('\n5️⃣ Testing POST /documents/filter as Regular User A...');
     const resFilterA = await makeRequest('/documents/filter', 'POST', {}, tokenA);
@@ -192,7 +198,29 @@ async function runRoleScopingTests() {
     if (!adminHasDocA || !adminHasDocB) {
       throw new Error('Admin should see both Doc A and Doc B');
     }
-    console.log('   ✅ Admin successfully sees documents across all users (softDelete = false).');
+    if (resGetAdmin.data.data.total !== rowsAdmin.length) {
+      throw new Error(`Expected Admin total to equal rows length (${rowsAdmin.length}), got ${resGetAdmin.data.data.total}`);
+    }
+    if (resGetAdmin.data.data.limit !== rowsAdmin.length) {
+      throw new Error(`Expected default limit for Admin to equal total (${rowsAdmin.length}), got ${resGetAdmin.data.data.limit}`);
+    }
+
+    // Test explicit pagination for Admin: ?limit=1&page=2
+    const resGetAdminPaged = await makeRequest('/documents?limit=1&page=2', 'GET', null, tokenAdmin);
+    if (resGetAdminPaged.status !== 200) throw new Error(`Expected 200 for paged GET /documents, got ${resGetAdminPaged.status}`);
+    if (resGetAdminPaged.data.data.rows.length !== 1) {
+      throw new Error(`Expected 1 row for limit=1, got ${resGetAdminPaged.data.data.rows.length}`);
+    }
+    if (resGetAdminPaged.data.data.total !== rowsAdmin.length) {
+      throw new Error(`Expected total to remain ${rowsAdmin.length} on page 2, got ${resGetAdminPaged.data.data.total}`);
+    }
+    if (resGetAdminPaged.data.data.page !== 2) {
+      throw new Error(`Expected page to be 2, got ${resGetAdminPaged.data.data.page}`);
+    }
+    if (resGetAdminPaged.data.data.totalPages !== rowsAdmin.length) {
+      throw new Error(`Expected totalPages to be ${rowsAdmin.length}, got ${resGetAdminPaged.data.data.totalPages}`);
+    }
+    console.log(`   ✅ Admin successfully sees documents across all users with total count: ${resGetAdmin.data.data.total} and pagination support.`);
 
     console.log('\n8️⃣ Testing POST /documents/filter as ADMIN...');
     const resFilterAdmin = await makeRequest('/documents/filter', 'POST', {}, tokenAdmin);

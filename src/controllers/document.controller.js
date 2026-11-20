@@ -79,6 +79,8 @@ class DocumentController {
 
       const options = {
         uploadedBy,
+        userRole: user.Role,
+        userId: user.UserId,
         page: req.query?.page,
         limit: req.query?.limit,
         sortBy: req.query?.sortBy,

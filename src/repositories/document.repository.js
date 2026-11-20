@@ -2,7 +2,7 @@ const { eq, and, or, ilike, gte, lte, desc, asc, sql, inArray, isNull } = requir
 const { db } = require('../db');
 const { DocumentDetails, RoverLedgers } = require('../models');
 const documentCaShareRepository = require('./documentCaShare.repository');
-const { DocumentType } = require('../enums');
+const { Role, DocumentType } = require('../enums');
 
 const SORT_COLUMNS = {
   createdAt: DocumentDetails.createdAt,
@@ -251,6 +251,9 @@ class DocumentRepository {
       } else {
         conditions.push(eq(DocumentDetails.uploadedBy, filters.uploadedBy));
       }
+    } else if (filters.userRole && filters.userRole !== Role.ADMIN && filters.userId) {
+      // Safety guard: If regular user didn't have uploadedBy explicitly set, enforce their own userId
+      conditions.push(eq(DocumentDetails.uploadedBy, filters.userId));
     }
 
     // Filter by isSharedWithCa (boolean: true or false)
@@ -272,19 +275,32 @@ class DocumentRepository {
   }
 
   /**
-   * Fetch all active documents for a specific authenticated user,
-   * without aggregate count calculation (counts moved to dedicated getDocumentCounts API).
+   * Fetch all active documents for a specific authenticated user or all documents for admin,
+   * returning results with the total count of documents stored in DB matching conditions and role.
+   * By default, if limit is omitted, limit defaults to the total count of stored documents.
    * 
-   * @param {object} options - Optional { uploadedBy, page, limit, sortBy, order }
-   * @returns {Promise<{ rows: Array, page?: number, limit?: number, totalPages?: number }>}
+   * @param {object} options - Optional { uploadedBy, page, limit, sortBy, order, isSharedWithCa, userRole, userId }
+   * @returns {Promise<{ rows: Array, total: number, page: number, limit: number, totalPages: number }>}
    */
   async getAllActiveDocuments(options = {}) {
     const conditions = this._buildConditions(options);
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-    const hasLimit = options.limit !== undefined && options.limit !== null && options.limit !== '';
-    const limit = hasLimit ? Math.max(1, parseInt(options.limit, 10)) : null;
+    // 1. Get total count of documents stored in DB matching the conditions and role
+    const countResult = await db
+      .select({
+        total: sql`count(*)::int`,
+      })
+      .from(DocumentDetails)
+      .where(whereClause);
+
+    const total = parseInt(countResult[0]?.total || '0', 10);
+
+    // 2. Pagination: page & limit
     const page = Math.max(1, parseInt(options.page || '1', 10));
+    const hasLimit = options.limit !== undefined && options.limit !== null && options.limit !== '';
+    // By default, if limit is omitted, default to the total count of documents stored in DB
+    const limit = hasLimit ? Math.max(1, parseInt(options.limit, 10)) : total;
 
     let query = db
       .select()
@@ -292,23 +308,25 @@ class DocumentRepository {
       .where(whereClause)
       .orderBy(getSortOrder(options.sortBy, options.order));
 
-    if (limit) {
+    if (hasLimit && limit > 0) {
       query = query.limit(limit).offset((page - 1) * limit);
+    } else if (limit > 0) {
+      query = query.limit(limit);
     }
 
     const rows = await query;
     const enrichedWithShares = await this._enrichDocumentsWithShares(rows);
     const enrichedRows = await this._enrichDocumentsWithUsers(enrichedWithShares);
 
-    const response = { rows: enrichedRows };
+    const totalPages = (limit && limit > 0) ? Math.max(1, Math.ceil(total / limit)) : 1;
 
-    if (hasLimit || options.page) {
-      response.page = page;
-      response.limit = limit || enrichedRows.length;
-      response.totalPages = limit ? Math.max(1, Math.ceil(enrichedRows.length / limit)) : 1;
-    }
-
-    return response;
+    return {
+      rows: enrichedRows,
+      total,
+      page,
+      limit: hasLimit ? limit : total,
+      totalPages,
+    };
   }
 
   /**
